@@ -1,66 +1,93 @@
 # Win Automator
 
-Обучаемый Windows-автоматизатор для переноса строк из Excel в формы настольных приложений. Оператор вручную проходит одну запись, Win Automator запоминает **смысловые элементы интерфейса**, связывает введённые значения со столбцами Excel и затем воспроизводит сценарий для остальных строк.
+[![CI](https://github.com/f2re/win-automator/actions/workflows/windows-build.yml/badge.svg)](https://github.com/f2re/win-automator/actions/workflows/windows-build.yml)
+[![Release](https://img.shields.io/github/v/release/f2re/win-automator?sort=semver)](https://github.com/f2re/win-automator/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/f2re/win-automator/total)](https://github.com/f2re/win-automator/releases)
+![Windows](https://img.shields.io/badge/Windows-7%20SP1%20%7C%2010%20%7C%2011-0078D6?logo=windows)
+![Python](https://img.shields.io/badge/dev%20runtime-Python%203.8.10-3776AB?logo=python&logoColor=white)
 
-## Что уже есть в прототипе 0.1
+**Win Automator** — обучаемый автоматизатор ввода данных из Excel в формы Windows-приложений. Оператор один раз показывает, как заполнить запись; программа связывает действия с колонками Excel и смысловыми UI Automation / Win32-элементами, после чего воспроизводит сценарий для остальных строк.
 
-- загрузка `.xlsx` без установленного Excel;
-- выбор листа и предпросмотр данных;
-- режим обучения с глобальной записью мыши и клавиатуры;
-- UI Automation + Win32 fingerprint элемента вместо жёстких экранных координат;
-- агрегация набранного текста в действие `SET_VALUE`;
-- автоматическая привязка записанного значения к единственному совпавшему столбцу Excel;
-- запись выбора ComboBox как смыслового `SELECT`, когда элемент доступен UIA;
-- визуальный редактор шагов;
-- повторный захват изменившегося элемента интерфейса;
-- проверка сценария на одной записи;
-- пакетная обработка строк;
-- пауза, остановка и checkpoint в SQLite;
-- продолжение незавершённого задания с проблемной строки;
-- автономная PyInstaller-сборка для оператора;
-- GitHub Actions build artifact для Windows x64;
-- online/offline bootstrap среды разработки.
+> Для обычного оператора Python и установка библиотек не нужны. Берите готовый `Setup.exe` или portable ZIP из [последнего релиза](https://github.com/f2re/win-automator/releases/latest).
 
-> Основная цель 0.1 — быстро проверить целевое Windows-приложение. Некоторые custom-rendered интерфейсы могут не предоставлять элементы через UIA/Win32; компьютерное зрение намеренно не входит в первый прототип.
+## Скачать и запустить
 
-## Быстрый старт на Windows 10 x64
+| Вариант | Для кого | Что делать |
+|---|---|---|
+| `WinAutomator-<version>-Setup-win-x64.exe` | обычный пользователь | скачать → запустить установщик → открыть Win Automator |
+| `WinAutomator-<version>-win-x64.zip` | portable / без установки | распаковать → запустить `WinAutomator.exe` |
+| `WinAutomator-<version>-offline-dev.zip` | закрытая сеть / разработчик | распаковать → `bootstrap.ps1 -Offline` |
+| `SHA256SUMS.txt` | проверка целостности | сверить SHA-256 скачанных файлов |
 
-Откройте PowerShell в каталоге проекта:
+Установщик ставится в профиль пользователя и не требует прав администратора. Минимальная целевая ОС — **Windows 7 SP1 x64**; основной тестовый путь — Windows 10 x64.
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\bootstrap.ps1
+## Как это работает
+
+```mermaid
+flowchart LR
+    X["Excel .xlsx"] --> D["Данные"]
+    D --> T["Обучение на одной строке"]
+    T --> R["Semantic Recorder"]
+    R --> I["UIA / Win32 Inspector"]
+    I --> S["Versioned Scenario JSON"]
+    S --> E["Редактор и повторный захват"]
+    E --> V["Проверка на следующей строке"]
+    V --> B["Пакетное выполнение"]
+    B --> C["Checkpoint SQLite"]
+    C -. resume .-> B
 ```
 
-`bootstrap.ps1` сам:
+Win Automator старается запоминать не координаты экрана, а признаки элемента: `AutomationId`, `ControlId`, тип контрола, имя, класс, родителя и окно. Это делает сценарий устойчивее к перемещению окна и небольшим изменениям интерфейса.
 
-1. скачает официальный `python-3.8.10-amd64.exe` с `python.org`, если локального runtime ещё нет;
-2. проверит опубликованный Python.org MD5 и Authenticode-подпись установщика;
-3. установит приватный Python в `.runtime\python38` без изменения системного `PATH`;
-4. создаст `.venv`;
-5. установит зафиксированные зависимости;
-6. выполнит self-test;
-7. запустит Win Automator.
+## Быстрый рабочий сценарий
 
-После первого развёртывания можно запускать `run.bat`.
+1. Откройте вкладку **Данные** и выберите `.xlsx`.
+2. Выберите лист и проверьте строки в предпросмотре.
+3. На вкладке **Сценарий** нажмите **Обучить на первой записи**.
+4. В целевой программе вручную заполните одну запись.
+5. `F8` — пауза/продолжение записи, `F9` — закончить обучение.
+6. Проверьте сформированные шаги; при необходимости исправьте поле или выполните **Указать заново**.
+7. Выполните тест на следующей строке.
+8. Запустите пакетную обработку. При ошибке используется checkpoint, поэтому задание можно продолжить с проблемной строки.
 
-### Почему Python 3.8.10
+## Возможности 0.2
 
-Прототип сначала ориентирован на Windows 10, но выбран Python 3.8.10, чтобы сохранить путь к дальнейшему запуску той же кодовой базы на Windows 7. Конечному оператору Python не нужен: release собирается PyInstaller в отдельный каталог/ZIP.
+- чтение `.xlsx` без установленного Microsoft Excel;
+- запись глобальных действий мыши и клавиатуры;
+- UI Automation + Win32 fingerprint вместо жесткой привязки к координатам;
+- `SET_VALUE`, `SELECT`, `CLICK`, `DOUBLE_CLICK`, `KEY`, `CLOSE_WINDOW`, `START_APP`;
+- автоматическое сопоставление введенного значения с колонкой Excel;
+- визуальный редактор шагов и повторный захват контрола;
+- проверка сценария перед массовым запуском;
+- пакетная обработка с паузой, остановкой, retry и checkpoint в SQLite;
+- автономный Windows x64 executable;
+- установщик без прав администратора;
+- portable ZIP;
+- air-gapped developer bundle с Python 3.8.10 и wheels;
+- CI, SemVer, автоматические GitHub Releases, SHA-256 и build provenance attestations.
 
-## Рабочий поток
+## Пример
 
-1. На вкладке **Данные** выберите Excel-файл.
-2. Перейдите в **Сценарий** и нажмите **Обучить на первой записи**.
-3. Win Automator скроется. В целевой программе вручную заполните первую строку Excel.
-4. `F8` — пауза обучения, `F9` — завершить обучение.
-5. Проверьте автоматически получившиеся шаги. Двойной щелчок открывает редактор.
-6. Для изменившегося/неправильно найденного control нажмите **Указать заново** и наведите мышь на правильный элемент.
-7. Выполните **Проверить на второй записи**.
-8. После успешной проверки запустите пакетную обработку.
+Готовый учебный комплект находится в [`examples/employee-entry`](examples/employee-entry):
 
-## Как хранится сценарий
+```text
+examples/employee-entry/
+├── README.md
+├── sample-data.xlsx
+└── scenario.json
+```
 
-Пользователь редактирует его через GUI, внутри используется простой versioned JSON:
+Он рассчитан на тестовую WinForms-форму:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\TargetForm.ps1
+```
+
+После запуска формы откройте `sample-data.xlsx`, обучите сценарий на первой строке и проверьте выполнение на следующих.
+
+Подробнее: [docs/EXAMPLES.md](docs/EXAMPLES.md).
+
+## Формат сценария
 
 ```json
 {
@@ -71,7 +98,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\bootstrap.ps1
       "action": "set_value",
       "target": {
         "backend": "uia",
-        "window_title": "Карточка сотрудника",
+        "window_title": "Карточка сотрудника — тест Win Automator",
         "automation_id": "txtFullName",
         "control_type": "Edit",
         "name": "ФИО"
@@ -87,104 +114,100 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\bootstrap.ps1
 }
 ```
 
-При воспроизведении control ищется по набору признаков: `AutomationId`, `ControlId`, тип, имя, класс, родитель и окно. Поэтому простое перемещение окна не должно ломать сценарий.
+Формат versioned: изменения, которые нарушают обратную совместимость сценариев, должны сопровождаться миграцией и изменением версии схемы.
 
-## Тестовая форма
+## Архитектура
 
-Для первичной проверки без боевого ПО:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\TargetForm.ps1
+```mermaid
+flowchart TB
+    UI["Tk UI"] --> EXCEL["ExcelSource / openpyxl"]
+    UI --> REC["SemanticRecorder / pynput"]
+    REC --> INS["Inspector"]
+    INS --> UIA["pywinauto UIA"]
+    INS --> WIN32["pywinauto Win32"]
+    UI --> EXEC["Executor"]
+    EXEC --> INS
+    EXEC --> MODEL["Scenario / Selector / ValueSpec"]
+    EXEC --> STORE["SQLite checkpoint"]
 ```
 
-Форма построена на WinForms и содержит доступные UIA/Win32-поля. Пример Excel создаётся командой:
+Подробное описание компонентов, selector scoring и границ MVP: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Разработка
+
+Windows PowerShell:
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\create_sample_data.py
+powershell -NoProfile -ExecutionPolicy Bypass -File .\bootstrap.ps1
 ```
 
-## Сборка автономного EXE
+Скрипт использует приватный Python 3.8.10 в `.runtime`, создает `.venv`, устанавливает зафиксированные зависимости, выполняет self-test и запускает приложение. Системный `PATH` не меняется.
+
+Сборка:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-Результат:
+Если установлен Inno Setup 6, дополнительно будет создан `Setup.exe`. В CI установщик обязателен.
 
-```text
-dist\WinAutomator\WinAutomator.exe
-dist\WinAutomator-0.1.0-win-x64.zip
-```
+## Релизы и версионирование
 
-Используется `onedir`, а не `onefile`: на прототипе это проще диагностировать и меньше зависит от временной распаковки/антивирусных эвристик.
+`VERSION` — единственный источник версии. Проект следует **Semantic Versioning**:
 
-## Offline bundle
+- `PATCH` — исправление без изменения публичного поведения;
+- `MINOR` — совместимое расширение функций;
+- `MAJOR` — несовместимое изменение сценариев, данных или пользовательского контракта.
 
-На машине с Интернетом:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\download-offline-deps.ps1
-```
-
-Будет создано:
-
-```text
-offline\
-├── python-3.8.10-amd64.exe
-└── wheels\
-    └── ...
-```
-
-Скопируйте весь репозиторий с каталогом `offline` на закрытую машину и выполните:
+Новая версия задается командой:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 -Offline
+.\scripts\set-version.ps1 0.2.1
 ```
 
-## Команды MVP
+После commit + push изменения `VERSION` в `main` workflow **Release** автоматически:
 
-- `click`
-- `double_click`
-- `set_value`
-- `select`
-- `key`
-- `close_window`
-- `start_app` (поддерживается executor; в GUI будет расширяться)
-
-Намеренно пока отсутствуют OCR, OpenCV, LLM, BPMN, сложные IF/ELSE и web-сервер.
-
-## Ограничения прототипа
-
-- На время автоматического ввода лучше не использовать мышь/клавиатуру в других приложениях.
-- Некоторые старые или полностью custom-drawn controls могут оказаться невидимыми для UIA/Win32. Следующий fallback для них — относительные координаты, затем image matching; это отдельный этап после проверки реального целевого приложения.
-- Recorder 0.1 делает упор на Edit/Button/ComboBox. Редкие составные controls могут потребовать ручной коррекции шага.
-- Python 3.8 уже не поддерживается Python Software Foundation; он выбран сознательно ради будущей совместимости с Windows 7. Runtime изолирован внутри проекта, версии библиотек зафиксированы.
-
-## Архитектура
-
-```text
-Excel (.xlsx)
-     │
-     ▼
- ExcelSource
-     │
-     ├── обучающая строка ─────────┐
-     │                             │
-     ▼                             ▼
-SemanticRecorder ──► Inspector/UIA/Win32
-     │
-     ▼
-Scenario JSON
-     │
-     ├──► Editor / re-pick
-     │
-     ▼
-Executor ──► selector scoring ──► Windows application
-     │
-     ▼
-Checkpoint SQLite ──► resume / retry
+```mermaid
+flowchart LR
+    V["VERSION changed"] --> T["tests"]
+    T --> P["PyInstaller"]
+    P --> S["EXE smoke-test"]
+    S --> I["Inno Setup"]
+    I --> O["offline-dev bundle"]
+    O --> H["SHA-256"]
+    H --> A["GitHub attestation"]
+    A --> R["tag + GitHub Release"]
 ```
 
-## Ближайший практический этап
+Повторная публикация уже существующей версии запрещена: нужно повысить `VERSION`. Полный процесс: [docs/RELEASES.md](docs/RELEASES.md).
 
-Проверить `Inspector + Recorder + Executor` на реальной программе, которую требуется заполнять. После этого станет понятно, какие controls видны напрямую и где нужен fallback. Только после этой проверки имеет смысл добавлять OCR/image matching или усложнять язык сценариев.
+## Проверка скачанного релиза
+
+```powershell
+Get-FileHash .\WinAutomator-0.2.0-Setup-win-x64.exe -Algorithm SHA256
+Get-Content .\SHA256SUMS.txt
+```
+
+Для публичных release assets workflow также создает GitHub artifact attestation, позволяющую проверить происхождение сборки.
+
+## Документация
+
+- [Установка и offline-развертывание](docs/INSTALL.md)
+- [Примеры](docs/EXAMPLES.md)
+- [Архитектура](docs/ARCHITECTURE.md)
+- [Версионирование и релизы](docs/RELEASES.md)
+- [История изменений](CHANGELOG.md)
+- [Участие в разработке](CONTRIBUTING.md)
+- [Политика безопасности](SECURITY.md)
+
+## Ограничения
+
+- Во время автоматического ввода не следует параллельно работать мышью/клавиатурой в другом приложении.
+- Custom-drawn controls могут быть невидимы для UIA/Win32. OCR/image matching пока не входят в базовый движок.
+- Recorder ориентирован на стандартные Edit/Button/ComboBox и близкие элементы. Составные контролы могут потребовать ручной коррекции.
+- Python 3.8 завершил upstream-поддержку; он используется как совместимый build/runtime путь для Windows 7. Конечный оператор получает автономный пакет.
+- Release EXE/installer пока не подписан коммерческим Authenticode-сертификатом; Windows SmartScreen может показывать предупреждение. Целостность подтверждается SHA-256 и GitHub build provenance.
+
+## Статус
+
+Проект находится на стадии рабочего прототипа. Основной следующий этап — испытания Recorder/Inspector/Executor на реальных целевых Windows-приложениях и добавление fallback-механизмов только там, где UIA/Win32 объективно недостаточно.
