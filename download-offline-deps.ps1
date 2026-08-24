@@ -13,11 +13,11 @@ function Invoke-Checked {
         [Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments
     )
     & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "Команда завершилась с кодом ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')" }
+    if ($LASTEXITCODE -ne 0) { throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')" }
 }
 
-if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Этот скрипт предназначен для Windows.' }
-if (-not [Environment]::Is64BitOperatingSystem) { throw 'Offline bundle формируется для Windows x64.' }
+if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'This script is for Windows only.' }
+if (-not [Environment]::Is64BitOperatingSystem) { throw 'Offline bundle is built for Windows x64.' }
 
 if (Test-Path $Wheels) { Remove-Item -Recurse -Force $Wheels }
 New-Item -ItemType Directory -Force -Path $Wheels | Out-Null
@@ -40,8 +40,8 @@ $Python = Join-Path $Root '.venv\Scripts\python.exe'
 
 Invoke-Checked $Python '-m' 'pip' 'download' '--only-binary=:all:' '--dest' $Wheels @BootstrapPackages '-r' (Join-Path $Root 'requirements-dev.txt')
 
-# Generate a cryptographic manifest for every payload file. The manifest itself
-# is intentionally excluded and regenerated on each bundle build.
+# Generate a SHA256 manifest for every payload file. The manifest itself is
+# excluded and regenerated on each bundle build.
 $files = @()
 Get-ChildItem -LiteralPath $Offline -Recurse -File | Where-Object { $_.Name -ne 'manifest.json' } | Sort-Object FullName | ForEach-Object {
     $relative = $_.FullName.Substring($Offline.Length).TrimStart('\').Replace('\', '/')
@@ -59,5 +59,5 @@ $manifest = [PSCustomObject]@{
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $Offline 'manifest.json') -Encoding UTF8
 
-Write-Host "Offline bundle подготовлен и проверен: $Offline" -ForegroundColor Green
-Write-Host "Файлов в manifest: $($files.Count)" -ForegroundColor Green
+Write-Host "Offline bundle is ready and verified: $Offline" -ForegroundColor Green
+Write-Host "Manifest payload files: $($files.Count)" -ForegroundColor Green
