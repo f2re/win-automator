@@ -35,7 +35,7 @@ try {
     } | ConvertTo-Json
     Set-Content -Path (Join-Path $AppDir 'version.json') -Value $versionInfo -Encoding UTF8
 
-    Write-Host 'Проверка собранного EXE...' -ForegroundColor Cyan
+    Write-Host 'Running built EXE smoke-test...' -ForegroundColor Cyan
     $smoke = Start-Process -FilePath (Join-Path $AppDir 'WinAutomator.exe') -ArgumentList '--smoke-test' -Wait -PassThru
     if ($smoke.ExitCode -ne 0) { throw "Built EXE smoke-test failed: $($smoke.ExitCode)" }
 
@@ -48,7 +48,7 @@ try {
 
     $zip = Join-Path $Root "dist\WinAutomator-$Version-win-x64.zip"
     Compress-Archive -Path (Join-Path $PackageRoot '*') -DestinationPath $zip -Force
-    Write-Host "Сборка готова: $zip" -ForegroundColor Green
+    Write-Host "Build ready: $zip" -ForegroundColor Green
 } finally {
     Pop-Location
 }
