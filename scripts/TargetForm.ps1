@@ -44,8 +44,19 @@ $save.Text = 'Сохранить'
 $save.Location = New-Object System.Drawing.Point(390,260)
 $save.Size = New-Object System.Drawing.Size(110,35)
 $save.Add_Click({
-    $msg = "ФИО: $($controls['ФИО'].Text)`nДата: $($controls['Дата рождения'].Text)`nОтдел: $($controls['Отдел'].Text)`nДолжность: $($controls['Должность'].Text)"
-    [System.Windows.Forms.MessageBox]::Show($msg, 'Запись сохранена') | Out-Null
+    if (-not [string]::IsNullOrWhiteSpace($env:WIN_AUTOMATOR_E2E_RESULT)) {
+        $payload = [PSCustomObject]@{
+            full_name = $controls['ФИО'].Text
+            birth_date = $controls['Дата рождения'].Text
+            department = $controls['Отдел'].Text
+            position = $controls['Должность'].Text
+        } | ConvertTo-Json
+        Set-Content -LiteralPath $env:WIN_AUTOMATOR_E2E_RESULT -Value $payload -Encoding UTF8
+        $form.Close()
+    } else {
+        $msg = "ФИО: $($controls['ФИО'].Text)`nДата: $($controls['Дата рождения'].Text)`nОтдел: $($controls['Отдел'].Text)`nДолжность: $($controls['Должность'].Text)"
+        [System.Windows.Forms.MessageBox]::Show($msg, 'Запись сохранена') | Out-Null
+    }
 })
 $form.Controls.Add($save)
 
