@@ -29,6 +29,26 @@ def _wait_for_file(path: Path, timeout: float = 15.0) -> None:
     raise AssertionError("Integration target did not write {}".format(path))
 
 
+def _wait_for_window(desktop, process, timeout: float = 15.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if process.poll() is not None:
+            stdout, stderr = process.communicate(timeout=2)
+            raise AssertionError(
+                "Integration target exited before showing its window (code {}).\nstdout:\n{}\nstderr:\n{}".format(
+                    process.returncode,
+                    stdout.decode("utf-8", errors="replace"),
+                    stderr.decode("utf-8", errors="replace"),
+                )
+            )
+        window = desktop.window(title="WinAutomator Integration Target")
+        if window.exists(timeout=0.2):
+            window.wait("visible enabled", timeout=5)
+            return window
+        time.sleep(0.1)
+    raise AssertionError("Integration target process is alive but its window is not visible")
+
+
 def _captured(window, automation_id: str):
     wrapper = window.child_window(auto_id=automation_id).wrapper_object()
     return selector_from_wrapper(wrapper, "uia")
@@ -86,8 +106,7 @@ def test_excel_to_multi_window_application_end_to_end(tmp_path):
         from pywinauto import Desktop
 
         desktop = Desktop(backend="uia")
-        window = desktop.window(title="WinAutomator Integration Target")
-        window.wait("visible enabled ready", timeout=15)
+        window = _wait_for_window(desktop, process)
 
         name_selector = _captured(window, "txtFullName")
         date_selector = _captured(window, "txtBirthDate")
