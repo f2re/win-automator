@@ -1,6 +1,7 @@
 param(
     [switch]$SkipBootstrap,
     [switch]$RequireInstaller,
+    [switch]$Offline,
     [string]$Version = ''
 )
 
@@ -10,15 +11,22 @@ Set-StrictMode -Version 2.0
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Dist = Join-Path $Root 'dist'
 
+if ($SkipBootstrap -and $Offline) {
+    throw '-Offline cannot be combined with -SkipBootstrap because no offline bootstrap would be performed.'
+}
+
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = (Get-Content -Raw (Join-Path $Root 'VERSION')).Trim()
 }
 if ($Version -notmatch '^\d+\.\d+\.\d+([\-+][0-9A-Za-z.-]+)?$') {
-    throw "Некорректная версия '$Version'. Ожидается SemVer, например 0.2.0 или 0.3.0-beta.1."
+    throw "Некорректная версия '$Version'. Ожидается SemVer, например 0.2.1 или 0.3.0-beta.1."
 }
 
 if (-not $SkipBootstrap) {
-    & (Join-Path $Root 'bootstrap.ps1') -NoRun
+    $bootstrapArgs = @('-NoRun')
+    if ($Offline) { $bootstrapArgs += '-Offline' }
+    & (Join-Path $Root 'bootstrap.ps1') @bootstrapArgs
+    if ($LASTEXITCODE -ne 0) { throw 'Bootstrap failed.' }
     $Python = Join-Path $Root '.venv\Scripts\python.exe'
 } else {
     $Python = (Get-Command python -ErrorAction Stop).Source
@@ -63,16 +71,17 @@ try {
         platform = 'windows-x64'
     } | ConvertTo-Json | Set-Content (Join-Path $AppDir 'version.json') -Encoding UTF8
 
-    Write-Host "==> Smoke-test packaged EXE" -ForegroundColor Cyan
-    $SmokeFile = Join-Path $Dist 'smoke-version.txt'
+    Write-Host "==> Smoke-test packaged EXE and bundled runtime" -ForegroundColor Cyan
+    $SmokeFile = Join-Path $Dist 'smoke-report.json'
     $process = Start-Process -FilePath (Join-Path $AppDir 'WinAutomator.exe') `
         -ArgumentList @('--smoke-test', "`"$SmokeFile`"") -Wait -PassThru
     if ($process.ExitCode -ne 0) { throw "Packaged EXE smoke-test failed with exit code $($process.ExitCode)." }
-    if (-not (Test-Path $SmokeFile)) { throw 'Packaged EXE did not produce smoke-test marker.' }
-    $smokeVersion = (Get-Content -Raw $SmokeFile).Trim()
+    if (-not (Test-Path $SmokeFile)) { throw 'Packaged EXE did not produce smoke-test report.' }
+    $smoke = Get-Content -Raw $SmokeFile | ConvertFrom-Json
     Remove-Item $SmokeFile -Force
-    if ($smokeVersion -ne $Version) {
-        throw "Packaged EXE version mismatch: expected $Version, got $smokeVersion."
+    if (-not $smoke.ok) { throw 'Packaged runtime smoke-test reported failure.' }
+    if ($smoke.version -ne $Version) {
+        throw "Packaged EXE version mismatch: expected $Version, got $($smoke.version)."
     }
 
     Write-Host "==> Portable archive" -ForegroundColor Cyan
