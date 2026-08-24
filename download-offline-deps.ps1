@@ -4,37 +4,71 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Set-StrictMode -Version 2.0
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Offline = Join-Path $Root 'offline'
 $Wheels = Join-Path $Offline 'wheels'
+$PythonInstaller = Join-Path $Offline 'python-3.8.10-amd64.exe'
+$ExpectedSha256 = '7628244CB53408B50639D2C1287C659F4E29D3DFDB9084B11AED5870C0C6A48A'
+$BootstrapPackages = @('pip==24.3.1', 'setuptools==75.3.2', 'wheel==0.45.1')
+
+function Invoke-Checked {
+    param(
+        [Parameter(Mandatory=$true)][string]$FilePath,
+        [Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments
+    )
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')" }
+}
+
+if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'This script is for Windows only.' }
+if (-not [Environment]::Is64BitOperatingSystem) { throw 'Offline bundle is built for Windows x64.' }
+
+if (Test-Path $Wheels) { Remove-Item -Recurse -Force $Wheels }
 New-Item -ItemType Directory -Force -Path $Wheels | Out-Null
 
-$pythonInstaller = Join-Path $Offline 'python-3.8.10-amd64.exe'
-if (-not (Test-Path $pythonInstaller)) {
+if (-not (Test-Path $PythonInstaller)) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -UseBasicParsing -Uri 'https://www.python.org/ftp/python/3.8.10/python-3.8.10-amd64.exe' -OutFile $pythonInstaller
+    Invoke-WebRequest -UseBasicParsing -Uri 'https://www.python.org/ftp/python/3.8.10/python-3.8.10-amd64.exe' -OutFile $PythonInstaller
 }
-$md5 = (Get-FileHash $pythonInstaller -Algorithm MD5).Hash.ToUpperInvariant()
-if ($md5 -ne '62CF1A12A5276B0259E8761D4CF4FE42') { throw 'Python installer checksum mismatch.' }
-$sig = Get-AuthenticodeSignature -FilePath $pythonInstaller
-if ($sig.Status -ne 'Valid') { throw "Python installer signature is not valid: $($sig.Status)" }
+$sha = (Get-FileHash -LiteralPath $PythonInstaller -Algorithm SHA256).Hash.ToUpperInvariant()
+if ($sha -ne $ExpectedSha256) { throw "Python installer SHA256 mismatch: $sha" }
+$sig = Get-AuthenticodeSignature -FilePath $PythonInstaller
+if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate -eq $null -or $sig.SignerCertificate.Subject -notmatch 'Python Software Foundation') {
+    throw "Python installer signature is not valid: $($sig.Status)"
+}
 
 if ([string]::IsNullOrWhiteSpace($Python)) {
     if ($SkipBootstrap) {
         $Python = (Get-Command python -ErrorAction Stop).Source
     } else {
         & (Join-Path $Root 'bootstrap.ps1') -NoRun
+        if ($LASTEXITCODE -ne 0) { throw 'Online bootstrap failed.' }
         $Python = Join-Path $Root '.venv\Scripts\python.exe'
     }
 }
-& $Python -m pip download --dest $Wheels -r (Join-Path $Root 'requirements-dev.txt')
-if ($LASTEXITCODE -ne 0) { throw 'pip download failed.' }
 
-@{
+Invoke-Checked $Python '-m' 'pip' 'download' '--only-binary=:all:' '--dest' $Wheels @BootstrapPackages '-r' (Join-Path $Root 'requirements-dev.txt')
+
+$files = @()
+Get-ChildItem -LiteralPath $Offline -Recurse -File | Where-Object { $_.Name -ne 'manifest.json' } | Sort-Object FullName | ForEach-Object {
+    $relative = $_.FullName.Substring($Offline.Length).TrimStart('\').Replace('\', '/')
+    $files += [PSCustomObject]@{
+        path = $relative
+        size = $_.Length
+        sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+}
+
+$manifest = [PSCustomObject]@{
+    version = 2
     created_at = (Get-Date).ToUniversalTime().ToString('o')
-    python = '3.8.10'
+    python = '3.8.10-amd64'
     requirements_runtime = (Get-Content -Raw (Join-Path $Root 'requirements-runtime.txt')).Trim()
     requirements_dev = (Get-Content -Raw (Join-Path $Root 'requirements-dev.txt')).Trim()
-} | ConvertTo-Json | Set-Content (Join-Path $Offline 'manifest.json') -Encoding UTF8
+    files = $files
+}
+$manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $Offline 'manifest.json') -Encoding UTF8
 
-Write-Host "Offline dependencies prepared: $Offline" -ForegroundColor Green
+Write-Host "Offline dependencies prepared and checksummed: $Offline" -ForegroundColor Green
+Write-Host "Payload files: $($files.Count)" -ForegroundColor Green
