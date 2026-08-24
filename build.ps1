@@ -6,6 +6,24 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Version = '0.1.1'
+
+function Invoke-SmokeWithTimeout {
+    param(
+        [Parameter(Mandatory=$true)][string]$FilePath,
+        [string]$Argument = '--smoke-test',
+        [int]$TimeoutSeconds = 30
+    )
+    $process = Start-Process -FilePath $FilePath -ArgumentList $Argument -PassThru
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $process.Kill() } catch {}
+        try { $process.WaitForExit() } catch {}
+        throw "Smoke-test timed out after $TimeoutSeconds seconds: $FilePath $Argument"
+    }
+    if ($process.ExitCode -ne 0) {
+        throw "Smoke-test failed with exit code $($process.ExitCode): $FilePath $Argument"
+    }
+}
+
 $BootstrapArgs = @('-NoRun')
 if ($Offline) { $BootstrapArgs += '-Offline' }
 & (Join-Path $Root 'bootstrap.ps1') @BootstrapArgs
@@ -18,6 +36,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
 
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue build, dist
+    Write-Host 'Building WinAutomator.exe with PyInstaller...' -ForegroundColor Cyan
     & $Python -m PyInstaller --noconfirm --clean --onedir --windowed `
         --name WinAutomator `
         --paths (Join-Path $Root 'src') `
@@ -25,6 +44,7 @@ try {
         --hidden-import pywinauto.controls.uiawrapper `
         app.py
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed.' }
+    Write-Host 'PyInstaller build completed.' -ForegroundColor Green
 
     $AppDir = Join-Path $Root 'dist\WinAutomator'
     Copy-Item README.md (Join-Path $AppDir 'README.md')
@@ -36,8 +56,8 @@ try {
     Set-Content -Path (Join-Path $AppDir 'version.json') -Value $versionInfo -Encoding UTF8
 
     Write-Host 'Running built EXE smoke-test...' -ForegroundColor Cyan
-    $smoke = Start-Process -FilePath (Join-Path $AppDir 'WinAutomator.exe') -ArgumentList '--smoke-test' -Wait -PassThru
-    if ($smoke.ExitCode -ne 0) { throw "Built EXE smoke-test failed: $($smoke.ExitCode)" }
+    Invoke-SmokeWithTimeout -FilePath (Join-Path $AppDir 'WinAutomator.exe')
+    Write-Host 'Built EXE smoke-test passed.' -ForegroundColor Green
 
     $PackageRoot = Join-Path $Root 'dist\package'
     New-Item -ItemType Directory -Force -Path $PackageRoot | Out-Null
