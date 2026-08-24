@@ -10,8 +10,8 @@ Set-StrictMode -Version 2.0
 
 function Write-Step([string]$Text) { Write-Host "`n==> $Text" -ForegroundColor Cyan }
 
-if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Установщик предназначен для Windows.' }
-if (-not [Environment]::Is64BitOperatingSystem) { throw 'Win Automator собран для Windows x64.' }
+if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Installer is for Windows only.' }
+if (-not [Environment]::Is64BitOperatingSystem) { throw 'Win Automator requires Windows x64.' }
 
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
     $local = $env:LOCALAPPDATA
@@ -22,10 +22,10 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
 $SourceDir = [IO.Path]::GetFullPath($SourceDir)
 $InstallDir = [IO.Path]::GetFullPath($InstallDir)
 $SourceExe = Join-Path $SourceDir 'WinAutomator.exe'
-if (-not (Test-Path -LiteralPath $SourceExe)) { throw "В пакете не найден WinAutomator.exe: $SourceExe" }
+if (-not (Test-Path -LiteralPath $SourceExe)) { throw "WinAutomator.exe is missing from package: $SourceExe" }
 
 $running = Get-Process -Name 'WinAutomator' -ErrorAction SilentlyContinue
-if ($running) { throw 'Win Automator уже запущен. Закройте приложение перед установкой/обновлением.' }
+if ($running) { throw 'Win Automator is already running. Close it before install/update.' }
 
 $parent = Split-Path -Parent $InstallDir
 New-Item -ItemType Directory -Force -Path $parent | Out-Null
@@ -34,18 +34,18 @@ $backup = "$InstallDir.old.$PID"
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $staging, $backup
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 
-Write-Step 'Копирование файлов приложения'
+Write-Step 'Copying application files'
 Copy-Item -Path (Join-Path $SourceDir '*') -Destination $staging -Recurse -Force
 
 $StagedExe = Join-Path $staging 'WinAutomator.exe'
-Write-Step 'Проверка собранного приложения до установки'
+Write-Step 'Verifying staged application'
 $smoke = Start-Process -FilePath $StagedExe -ArgumentList '--smoke-test' -Wait -PassThru
 if ($smoke.ExitCode -ne 0) {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $staging
-    throw "Smoke-test собранного приложения завершился с кодом $($smoke.ExitCode). Установка отменена."
+    throw "Staged smoke-test failed with exit code $($smoke.ExitCode). Install cancelled."
 }
 
-Write-Step 'Атомарная установка'
+Write-Step 'Installing atomically'
 try {
     if (Test-Path -LiteralPath $InstallDir) { Move-Item -LiteralPath $InstallDir -Destination $backup }
     Move-Item -LiteralPath $staging -Destination $InstallDir
@@ -57,17 +57,17 @@ try {
 }
 
 $InstalledExe = Join-Path $InstallDir 'WinAutomator.exe'
-Write-Step 'Контрольный запуск установленной копии'
+Write-Step 'Verifying installed application'
 $smokeInstalled = Start-Process -FilePath $InstalledExe -ArgumentList '--smoke-test' -Wait -PassThru
 if ($smokeInstalled.ExitCode -ne 0) {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $InstallDir
     if (Test-Path -LiteralPath $backup) { Move-Item -LiteralPath $backup -Destination $InstallDir }
-    throw "Smoke-test после установки завершился с кодом $($smokeInstalled.ExitCode). Выполнен откат."
+    throw "Installed smoke-test failed with exit code $($smokeInstalled.ExitCode). Previous version restored."
 }
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $backup
 
 if (-not $NoShortcut) {
-    Write-Step 'Создание ярлыков'
+    Write-Step 'Creating shortcuts'
     $shell = New-Object -ComObject WScript.Shell
     $desktop = [Environment]::GetFolderPath('Desktop')
     if (-not [string]::IsNullOrWhiteSpace($desktop)) {
@@ -88,8 +88,8 @@ if (-not $NoShortcut) {
     }
 }
 
-Write-Host "`nWin Automator установлен: $InstallDir" -ForegroundColor Green
+Write-Host "`nWin Automator installed: $InstallDir" -ForegroundColor Green
 if (-not $NoLaunch) {
-    Write-Step 'Запуск Win Automator'
+    Write-Step 'Starting Win Automator'
     Start-Process -FilePath $InstalledExe -WorkingDirectory $InstallDir | Out-Null
 }
