@@ -10,9 +10,28 @@ Set-StrictMode -Version 2.0
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Dist = Join-Path $Root 'dist'
+$ProjectPython = Join-Path $Root '.venv\Scripts\python.exe'
 
 if ($SkipBootstrap -and $Offline) {
     throw '-Offline cannot be combined with -SkipBootstrap because no offline bootstrap would be performed.'
+}
+
+function Invoke-ProcessWithTimeout {
+    param(
+        [Parameter(Mandatory=$true)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [int]$TimeoutSeconds = 90
+    )
+    $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $process.Kill() } catch {}
+        try { $process.WaitForExit() } catch {}
+        throw "Process timed out after $TimeoutSeconds seconds: $FilePath $($ArgumentList -join ' ')"
+    }
+    if ($process.ExitCode -ne 0) {
+        throw "Process failed with exit code $($process.ExitCode): $FilePath $($ArgumentList -join ' ')"
+    }
+    return $process
 }
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
@@ -22,12 +41,18 @@ if ($Version -notmatch '^\d+\.\d+\.\d+([\-+][0-9A-Za-z.-]+)?$') {
     throw "Некорректная версия '$Version'. Ожидается SemVer, например 0.2.1 или 0.3.0-beta.1."
 }
 
-if (-not $SkipBootstrap) {
+if ($Offline -and (Test-Path $ProjectPython)) {
+    # A preceding bootstrap.ps1 -Offline has already verified the manifest and
+    # installed the pinned wheel set. Reuse it instead of reinstalling the
+    # same environment before every offline build.
+    Write-Host '==> Reusing verified offline virtual environment' -ForegroundColor Cyan
+    $Python = $ProjectPython
+} elseif (-not $SkipBootstrap) {
     $bootstrapArgs = @('-NoRun')
     if ($Offline) { $bootstrapArgs += '-Offline' }
     & (Join-Path $Root 'bootstrap.ps1') @bootstrapArgs
     if ($LASTEXITCODE -ne 0) { throw 'Bootstrap failed.' }
-    $Python = Join-Path $Root '.venv\Scripts\python.exe'
+    $Python = $ProjectPython
 } else {
     $Python = (Get-Command python -ErrorAction Stop).Source
 }
@@ -73,9 +98,8 @@ try {
 
     Write-Host "==> Smoke-test packaged EXE and bundled runtime" -ForegroundColor Cyan
     $SmokeFile = Join-Path $Dist 'smoke-report.json'
-    $process = Start-Process -FilePath (Join-Path $AppDir 'WinAutomator.exe') `
-        -ArgumentList @('--smoke-test', "`"$SmokeFile`"") -Wait -PassThru
-    if ($process.ExitCode -ne 0) { throw "Packaged EXE smoke-test failed with exit code $($process.ExitCode)." }
+    Invoke-ProcessWithTimeout -FilePath (Join-Path $AppDir 'WinAutomator.exe') `
+        -ArgumentList @('--smoke-test', "`"$SmokeFile`"") -TimeoutSeconds 90 | Out-Null
     if (-not (Test-Path $SmokeFile)) { throw 'Packaged EXE did not produce smoke-test report.' }
     $smoke = Get-Content -Raw $SmokeFile | ConvertFrom-Json
     Remove-Item $SmokeFile -Force
