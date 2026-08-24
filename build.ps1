@@ -62,9 +62,9 @@ try {
     $PackageRoot = Join-Path $Root 'dist\package'
     New-Item -ItemType Directory -Force -Path $PackageRoot | Out-Null
     Copy-Item -Path $AppDir -Destination (Join-Path $PackageRoot 'WinAutomator') -Recurse -Force
-    Copy-Item -Path (Join-Path $Root 'install.ps1') -Destination (Join-Path $PackageRoot 'install.ps1') -Force
-    Copy-Item -Path (Join-Path $Root 'uninstall.ps1') -Destination (Join-Path $PackageRoot 'uninstall.ps1') -Force
-    Copy-Item -Path (Join-Path $Root 'README.md') -Destination (Join-Path $PackageRoot 'README.md') -Force
+    foreach ($file in @('install.ps1', 'install.cmd', 'uninstall.ps1', 'uninstall.cmd', 'README.md')) {
+        Copy-Item -Path (Join-Path $Root $file) -Destination (Join-Path $PackageRoot $file) -Force
+    }
 
     $zip = Join-Path $Root "dist\WinAutomator-$Version-win-x64.zip"
     Compress-Archive -Path (Join-Path $PackageRoot '*') -DestinationPath $zip -Force
