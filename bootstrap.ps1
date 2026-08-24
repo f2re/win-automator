@@ -25,7 +25,7 @@ function Invoke-Checked {
     )
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Команда завершилась с кодом $LASTEXITCODE`: $FilePath $($Arguments -join ' ')"
+        throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')"
     }
 }
 
@@ -33,15 +33,15 @@ function Test-OfflineManifest {
     $offlineRoot = Join-Path $Root 'offline'
     $manifestPath = Join-Path $offlineRoot 'manifest.json'
     if (-not (Test-Path $manifestPath)) {
-        throw "Offline manifest не найден: $manifestPath. Сначала выполните download-offline-deps.ps1."
+        throw "Offline manifest is missing: $manifestPath. Run download-offline-deps.ps1 first."
     }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     foreach ($item in @($manifest.files)) {
         $filePath = Join-Path $offlineRoot ([string]$item.path)
-        if (-not (Test-Path -LiteralPath $filePath)) { throw "Offline-файл отсутствует: $($item.path)" }
+        if (-not (Test-Path -LiteralPath $filePath)) { throw "Offline file is missing: $($item.path)" }
         $actual = (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToUpperInvariant()
         if ($actual -ne ([string]$item.sha256).ToUpperInvariant()) {
-            throw "Нарушена целостность offline-файла $($item.path): $actual"
+            throw "Offline file integrity check failed for $($item.path): $actual"
         }
     }
 }
@@ -49,31 +49,32 @@ function Test-OfflineManifest {
 function Test-PythonInstaller([string]$Path, [switch]$RequireValidSignature) {
     $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
     if ($actual -ne $ExpectedSha256) {
-        throw "Контрольная сумма Python installer не совпала: $actual"
+        throw "Python installer SHA256 mismatch: $actual"
     }
     $sig = Get-AuthenticodeSignature -FilePath $Path
     if ($sig.SignerCertificate -eq $null -or $sig.SignerCertificate.Subject -notmatch 'Python Software Foundation') {
-        throw 'Python installer не подписан Python Software Foundation.'
+        throw 'Python installer is not signed by Python Software Foundation.'
     }
     if ($RequireValidSignature -and $sig.Status -ne 'Valid') {
-        throw "Некорректная цифровая подпись Python installer: $($sig.Status)"
+        throw "Python installer signature is not valid: $($sig.Status)"
     }
 }
 
-if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Этот bootstrap предназначен для Windows.' }
-if (-not [Environment]::Is64BitOperatingSystem) { throw 'Прототип рассчитан на Windows x64.' }
+if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'This bootstrap is for Windows only.' }
+if (-not [Environment]::Is64BitOperatingSystem) { throw 'Win Automator prototype requires Windows x64.' }
 
 New-Item -ItemType Directory -Force -Path $Downloads | Out-Null
 
 if ($Offline) {
-    Write-Step 'Проверка целостности offline-bundle'
+    Write-Step 'Verifying offline bundle integrity'
     Test-OfflineManifest
 }
 
 $runtimeOk = $false
 if (Test-Path $Python) {
     try {
-        $detected = (& $Python -c "import platform,sys; print('{}.{}.{}|{}'.format(*sys.version_info[:3], platform.architecture()[0]))").Trim()
+        $versionProbe = 'import platform,sys; print("{}.{}.{}|{}".format(sys.version_info[0],sys.version_info[1],sys.version_info[2],platform.architecture()[0]))'
+        $detected = (& $Python -c $versionProbe).Trim()
         $runtimeOk = ($LASTEXITCODE -eq 0 -and $detected -eq '3.8.10|64bit')
     } catch {
         $runtimeOk = $false
@@ -84,10 +85,10 @@ if (-not $runtimeOk) {
     if (Test-Path $Venv) { Remove-Item -Recurse -Force $Venv }
     New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
 
-    Write-Step 'Подготовка Python 3.8.10 x64'
+    Write-Step 'Preparing Python 3.8.10 x64'
     $OfflineInstaller = Join-Path $Root 'offline\python-3.8.10-amd64.exe'
     if ($Offline) {
-        if (-not (Test-Path $OfflineInstaller)) { throw "Offline installer не найден: $OfflineInstaller" }
+        if (-not (Test-Path $OfflineInstaller)) { throw "Offline installer is missing: $OfflineInstaller" }
         Copy-Item $OfflineInstaller $Installer -Force
         Test-PythonInstaller -Path $Installer
     } else {
@@ -108,32 +109,32 @@ if (-not $runtimeOk) {
         'Shortcuts=0'
     )
     $p = Start-Process -FilePath $Installer -ArgumentList $args -Wait -PassThru
-    if ($p.ExitCode -ne 0 -or -not (Test-Path $Python)) { throw "Python installer завершился с кодом $($p.ExitCode)" }
+    if ($p.ExitCode -ne 0 -or -not (Test-Path $Python)) { throw "Python installer failed with exit code $($p.ExitCode)" }
 }
 
-Write-Step 'Создание виртуального окружения'
+Write-Step 'Creating virtual environment'
 if (-not (Test-Path $VenvPython)) { Invoke-Checked $Python '-m' 'venv' $Venv }
 
-Write-Step 'Подготовка pip/setuptools/wheel'
+Write-Step 'Preparing pip/setuptools/wheel'
 $OfflineWheels = Join-Path $Root 'offline\wheels'
 if ($Offline) {
-    if (-not (Test-Path $OfflineWheels)) { throw "Offline wheels не найдены: $OfflineWheels" }
+    if (-not (Test-Path $OfflineWheels)) { throw "Offline wheels are missing: $OfflineWheels" }
     Invoke-Checked $VenvPython '-m' 'pip' 'install' '--disable-pip-version-check' '--no-index' '--find-links' $OfflineWheels @BootstrapPackages
 } else {
     Invoke-Checked $VenvPython '-m' 'pip' 'install' '--disable-pip-version-check' @BootstrapPackages
 }
 
-Write-Step 'Установка зависимостей'
+Write-Step 'Installing project dependencies'
 if ($Offline) {
     Invoke-Checked $VenvPython '-m' 'pip' 'install' '--disable-pip-version-check' '--no-index' '--find-links' $OfflineWheels '-r' (Join-Path $Root 'requirements-dev.txt')
 } else {
     Invoke-Checked $VenvPython '-m' 'pip' 'install' '--disable-pip-version-check' '-r' (Join-Path $Root 'requirements-dev.txt')
 }
 
-Write-Step 'Проверка среды'
+Write-Step 'Running environment self-test'
 Invoke-Checked $VenvPython (Join-Path $Root 'scripts\self_test.py')
 
 if (-not $NoRun) {
-    Write-Step 'Запуск Win Automator'
+    Write-Step 'Starting Win Automator'
     Invoke-Checked $VenvPython (Join-Path $Root 'app.py')
 }
