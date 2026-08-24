@@ -12,7 +12,7 @@ from .executor import Executor
 from .inspector import inspect_cursor
 from .models import Scenario, Step, ValueSpec
 from .recorder import SemanticRecorder
-from .storage import CheckpointDB, data_dir
+from .storage import CheckpointDB, data_dir, excel_fingerprint
 
 
 class App(tk.Tk):
@@ -28,6 +28,7 @@ class App(tk.Tk):
         self.sheet = tk.StringVar()
         self.headers: List[str] = []
         self.rows: List[Dict[str, object]] = []
+        self.header_row = 1
         self.scenario = Scenario(name="Новый сценарий")
         self.recorder: Optional[SemanticRecorder] = None
         self.db = CheckpointDB()
@@ -143,6 +144,7 @@ class App(tk.Tk):
                 self.excel.close()
             self.excel = ExcelSource(Path(path))
             self.excel_path.set(path)
+            self.current_job_id = None
             self.sheet_combo["values"] = self.excel.sheets
             if self.excel.sheets:
                 self.sheet.set(self.excel.sheets[0])
@@ -153,7 +155,9 @@ class App(tk.Tk):
     def load_sheet(self) -> None:
         if not self.excel or not self.sheet.get():
             return
-        self.headers, self.rows = self.excel.read(self.sheet.get())
+        self.current_job_id = None
+        self.header_row = self.excel.detect_header_row(self.sheet.get())
+        self.headers, self.rows = self.excel.read(self.sheet.get(), header_row=self.header_row)
         self.preview.delete(*self.preview.get_children())
         self.preview["columns"] = self.headers
         for header in self.headers:
@@ -161,7 +165,11 @@ class App(tk.Tk):
             self.preview.column(header, width=150, anchor="w")
         for row in self.rows[:50]:
             self.preview.insert("", "end", values=[row.get(h, "") for h in self.headers])
-        self.run_summary.set("{} записей, {} столбцов".format(len(self.rows), len(self.headers)))
+        self.run_summary.set(
+            "{} записей, {} столбцов · заголовки: строка {}".format(
+                len(self.rows), len(self.headers), self.header_row
+            )
+        )
         self.status.set("Загружено {} записей".format(len(self.rows)))
 
     def start_recording(self) -> None:
@@ -320,13 +328,29 @@ class App(tk.Tk):
         self.stop_event.clear()
         self.pause_event.set()
         start_index = 0
-        incomplete = self.db.latest_incomplete(self.excel_path.get(), self.sheet.get(), self.scenario.name)
+        try:
+            fingerprint = excel_fingerprint(Path(self.excel_path.get()))
+        except Exception as exc:
+            messagebox.showerror("Запуск", "Не удалось проверить Excel-файл: {}".format(exc))
+            return
+
+        incomplete = self.db.latest_incomplete(
+            self.excel_path.get(), self.sheet.get(), self.scenario.name, fingerprint=fingerprint
+        )
+        resume_existing = False
         if incomplete and incomplete[1] < len(self.rows):
             if messagebox.askyesno("Продолжить", "Есть незавершённое задание. Продолжить с записи {}?".format(incomplete[1] + 1)):
                 start_index = int(incomplete[1])
                 self.current_job_id = int(incomplete[0])
-        if self.current_job_id is None or start_index == 0:
-            self.current_job_id = self.db.create_job(self.excel_path.get(), self.sheet.get(), self.scenario.name, len(self.rows))
+                resume_existing = True
+        if not resume_existing:
+            self.current_job_id = self.db.create_job(
+                self.excel_path.get(),
+                self.sheet.get(),
+                self.scenario.name,
+                len(self.rows),
+                fingerprint=fingerprint,
+            )
         self.progress["maximum"] = len(self.rows)
         self.progress["value"] = start_index
         self.run_button.configure(state="disabled")
