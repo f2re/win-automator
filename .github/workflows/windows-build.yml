@@ -1,4 +1,4 @@
-name: Windows build
+name: CI
 
 on:
   push:
@@ -9,34 +9,54 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  test-and-build:
+    name: Windows x64 / Python 3.8
     runs-on: windows-2022
+    timeout-minutes: 20
+
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Python 3.8
+        uses: actions/setup-python@v7
         with:
-          python-version: '3.8'
+          python-version: '3.8.10'
           cache: pip
           cache-dependency-path: |
             requirements-runtime.txt
             requirements-dev.txt
+
       - name: Install dependencies
         shell: pwsh
         run: |
-          python -m pip install pip==24.3.1
+          python -m pip install --disable-pip-version-check pip==24.3.1
           python -m pip install -r requirements-dev.txt
-      - name: Tests
-        run: python -m pytest -q
-      - name: Build executable
+
+      - name: Build portable package
+        shell: pwsh
+        run: .\build.ps1 -SkipBootstrap
+
+      - name: Verify release manifest
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name WinAutomator --paths src --collect-submodules comtypes --hidden-import pywinauto.controls.uiawrapper app.py
-          Copy-Item README.md dist\WinAutomator\README.md
-          @{ version='0.1.0'; python='3.8'; built_at=(Get-Date).ToUniversalTime().ToString('o') } | ConvertTo-Json | Set-Content dist\WinAutomator\version.json -Encoding UTF8
-          Compress-Archive -Path dist\WinAutomator\* -DestinationPath dist\WinAutomator-win-x64.zip -Force
-      - uses: actions/upload-artifact@v7
+          $version = (Get-Content -Raw VERSION).Trim()
+          $manifest = Get-Content -Raw dist\WinAutomator\version.json | ConvertFrom-Json
+          if ($manifest.version -ne $version) { throw "Version mismatch: $($manifest.version) != $version" }
+          if (-not (Test-Path "dist\WinAutomator-$version-win-x64.zip")) { throw "Portable archive missing." }
+          Get-Content dist\SHA256SUMS.txt
+
+      - name: Upload CI package
+        uses: actions/upload-artifact@v7
         with:
-          name: WinAutomator-win-x64
-          path: dist/WinAutomator-win-x64.zip
+          name: WinAutomator-${{ github.sha }}-win-x64
+          path: |
+            dist/WinAutomator-*-win-x64.zip
+            dist/SHA256SUMS.txt
           if-no-files-found: error
+          retention-days: 14
