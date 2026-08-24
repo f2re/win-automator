@@ -9,8 +9,12 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
-  verified-build:
+  prepare-online:
+    name: Prepare and verify online bundle
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
@@ -24,13 +28,11 @@ jobs:
 
       - name: Unit tests
         shell: powershell
-        run: |
-          .\.venv\Scripts\python.exe -m pytest -q
+        run: .\.venv\Scripts\python.exe -m pytest -q
 
       - name: Real UIA executor E2E
         shell: powershell
-        run: |
-          .\.venv\Scripts\python.exe .\scripts\e2e_ui_test.py
+        run: .\.venv\Scripts\python.exe .\scripts\e2e_ui_test.py
 
       - name: Build complete offline bundle
         shell: powershell
@@ -40,17 +42,52 @@ jobs:
           if (-not (Test-Path 'offline\manifest.json')) { throw 'Offline manifest missing.' }
           if ((Get-ChildItem 'offline\wheels' -File).Count -lt 5) { throw 'Offline wheel set is unexpectedly small.' }
 
-      - name: Re-bootstrap with network deliberately unavailable
+      - name: Upload offline bundle for clean target runner
+        uses: actions/upload-artifact@v7
+        with:
+          name: WinAutomator-offline-bundle
+          path: offline
+          if-no-files-found: error
+          retention-days: 7
+
+  offline-deploy:
+    name: Fresh offline deployment and launch
+    needs: prepare-online
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download prepared offline bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: WinAutomator-offline-bundle
+          path: offline
+
+      - name: Verify downloaded offline payload
+        shell: powershell
+        run: |
+          if (-not (Test-Path 'offline\python-3.8.10-amd64.exe')) { throw 'Python installer missing after artifact download.' }
+          if (-not (Test-Path 'offline\manifest.json')) { throw 'Manifest missing after artifact download.' }
+          if ((Get-ChildItem 'offline\wheels' -File).Count -lt 5) { throw 'Offline wheels missing after artifact download.' }
+
+      - name: Bootstrap on fresh runner with network deliberately unavailable
         shell: powershell
         env:
           HTTP_PROXY: http://127.0.0.1:9
           HTTPS_PROXY: http://127.0.0.1:9
           ALL_PROXY: http://127.0.0.1:9
         run: |
-          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue .runtime, .venv
           .\bootstrap.ps1 -Offline -NoRun
           .\.venv\Scripts\python.exe .\scripts\self_test.py
           .\.venv\Scripts\python.exe -m pytest -q
+
+      - name: Real UIA E2E after offline bootstrap
+        shell: powershell
+        env:
+          HTTP_PROXY: http://127.0.0.1:9
+          HTTPS_PROXY: http://127.0.0.1:9
+          ALL_PROXY: http://127.0.0.1:9
+        run: .\.venv\Scripts\python.exe .\scripts\e2e_ui_test.py
 
       - name: Build application using offline dependencies only
         shell: powershell
@@ -58,10 +95,9 @@ jobs:
           HTTP_PROXY: http://127.0.0.1:9
           HTTPS_PROXY: http://127.0.0.1:9
           ALL_PROXY: http://127.0.0.1:9
-        run: |
-          .\build.ps1 -Offline
+        run: .\build.ps1 -Offline
 
-      - name: Install package into a clean target directory
+      - name: Install package into a clean target directory and launch it
         shell: powershell
         run: |
           $zip = Get-ChildItem 'dist\WinAutomator-*-win-x64.zip' | Select-Object -First 1
@@ -70,6 +106,7 @@ jobs:
           $installed = Join-Path $env:RUNNER_TEMP 'win-automator-installed'
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $package, $installed
           Expand-Archive -LiteralPath $zip.FullName -DestinationPath $package
+
           & (Join-Path $package 'install.ps1') -InstallDir $installed -NoShortcut -NoLaunch
           if (-not (Test-Path (Join-Path $installed 'WinAutomator.exe'))) { throw 'Installed EXE not found.' }
 
@@ -87,7 +124,8 @@ jobs:
           & (Join-Path $package 'uninstall.ps1') -InstallDir $installed
           if (Test-Path $installed) { throw 'Uninstall did not remove target directory.' }
 
-      - uses: actions/upload-artifact@v7
+      - name: Upload verified distribution
+        uses: actions/upload-artifact@v7
         with:
           name: WinAutomator-verified-win-x64
           path: dist/WinAutomator-*-win-x64.zip
