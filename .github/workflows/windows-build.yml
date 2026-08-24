@@ -17,7 +17,7 @@ jobs:
   test-and-build:
     name: Windows x64 / Python 3.8
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -32,31 +32,57 @@ jobs:
             requirements-runtime.txt
             requirements-dev.txt
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         shell: pwsh
         run: |
           python -m pip install --disable-pip-version-check pip==24.3.1
           python -m pip install -r requirements-dev.txt
 
-      - name: Build portable package
+      - name: Install Inno Setup
         shell: pwsh
-        run: .\build.ps1 -SkipBootstrap
+        run: choco install innosetup --no-progress -y
 
-      - name: Verify release manifest
+      - name: Build release packages
+        shell: pwsh
+        run: .\build.ps1 -SkipBootstrap -RequireInstaller
+
+      - name: Verify release manifest and installer
         shell: pwsh
         run: |
           $version = (Get-Content -Raw VERSION).Trim()
           $manifest = Get-Content -Raw dist\WinAutomator\version.json | ConvertFrom-Json
           if ($manifest.version -ne $version) { throw "Version mismatch: $($manifest.version) != $version" }
-          if (-not (Test-Path "dist\WinAutomator-$version-win-x64.zip")) { throw "Portable archive missing." }
+
+          $portable = "dist\WinAutomator-$version-win-x64.zip"
+          $setup = "dist\WinAutomator-$version-Setup-win-x64.exe"
+          if (-not (Test-Path $portable)) { throw "Portable archive missing: $portable" }
+          if (-not (Test-Path $setup)) { throw "Installer missing: $setup" }
+          if (-not (Test-Path 'dist\SHA256SUMS.txt')) { throw 'SHA256SUMS.txt missing.' }
+
+          $installDir = Join-Path $env:RUNNER_TEMP "WinAutomator-$version-installed"
+          $installer = (Resolve-Path $setup).Path
+          $p = Start-Process -FilePath $installer -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$installDir`""
+          ) -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Installer smoke-test failed with exit code $($p.ExitCode)." }
+
+          $installedExe = Join-Path $installDir 'WinAutomator.exe'
+          if (-not (Test-Path $installedExe)) { throw "Installed executable missing: $installedExe" }
+          $smoke = Join-Path $env:RUNNER_TEMP 'installed-version.txt'
+          $p = Start-Process -FilePath $installedExe -ArgumentList @('--smoke-test', "`"$smoke`"") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Installed EXE smoke-test failed with exit code $($p.ExitCode)." }
+          $installedVersion = (Get-Content -Raw $smoke).Trim()
+          if ($installedVersion -ne $version) { throw "Installed version mismatch: $installedVersion != $version" }
+
           Get-Content dist\SHA256SUMS.txt
 
-      - name: Upload CI package
+      - name: Upload CI packages
         uses: actions/upload-artifact@v7
         with:
           name: WinAutomator-${{ github.sha }}-win-x64
           path: |
             dist/WinAutomator-*-win-x64.zip
+            dist/WinAutomator-*-Setup-win-x64.exe
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
