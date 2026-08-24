@@ -36,7 +36,7 @@ def main() -> int:
         result_path = Path(tmp) / "result.json"
         env = os.environ.copy()
         env["WIN_AUTOMATOR_E2E_RESULT"] = str(result_path)
-        target = ROOT / "scripts" / "TargetForm.ps1"
+        target = ROOT / "scripts" / "E2ETargetForm.ps1"
         proc = subprocess.Popen(
             [
                 "powershell.exe",
@@ -114,7 +114,7 @@ def main() -> int:
 
             proc.wait(timeout=10)
             if proc.returncode != 0:
-                raise RuntimeError("TargetForm exited with code {}".format(proc.returncode))
+                raise RuntimeError("E2ETargetForm exited with code {}".format(proc.returncode))
             print("UIA E2E OK: Unicode text filled, ComboBox selected and Save invoked")
             return 0
         finally:
