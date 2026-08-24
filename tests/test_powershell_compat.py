@@ -11,8 +11,25 @@ ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell compatibility test")
 
 
+def _powershell_scripts():
+    return sorted(ROOT.rglob("*.ps1"))
+
+
+def test_non_ascii_powershell_scripts_are_utf8_bom_encoded():
+    failures = []
+    for script in _powershell_scripts():
+        payload = script.read_bytes()
+        text = payload.decode("utf-8-sig")
+        if any(ord(char) > 127 for char in text) and not payload.startswith(b"\xef\xbb\xbf"):
+            failures.append(str(script.relative_to(ROOT)))
+    assert not failures, (
+        "Windows PowerShell 5.1 needs UTF-8 BOM for non-ASCII scripts: "
+        + ", ".join(failures)
+    )
+
+
 def test_all_powershell_scripts_parse_with_windows_powershell():
-    scripts = sorted(ROOT.rglob("*.ps1"))
+    scripts = _powershell_scripts()
     assert scripts
     command = (
         "$errors = $null; $tokens = $null; "
