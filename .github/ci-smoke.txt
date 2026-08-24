@@ -1,0 +1,1 @@
+Windows CI smoke trigger for prototype 0.1.
