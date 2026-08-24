@@ -1,0 +1,47 @@
+name: Ошибка
+description: Сообщить о воспроизводимой проблеме Win Automator
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Не публикуйте конфиденциальные данные из рабочих Excel-файлов. По возможности воспроизведите проблему на обезличенном примере.
+  - type: input
+    id: version
+    attributes:
+      label: Версия
+      description: Версия из release или файла version.json
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Windows
+      options:
+        - Windows 7 SP1 x64
+        - Windows 10 x64
+        - Windows 11 x64
+        - Другая
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как воспроизвести
+      description: Минимальная последовательность действий
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Фактическое поведение / журнал
+    validations:
+      required: true
