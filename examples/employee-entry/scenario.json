@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "name": "Employee entry example",
+  "steps": [
+    {
+      "action": "set_value",
+      "target": {
+        "backend": "uia",
+        "window_title": "Карточка сотрудника — тест Win Automator",
+        "automation_id": "txtFullName",
+        "control_type": "Edit",
+        "name": "ФИО"
+      },
+      "value": {
+        "source": "excel",
+        "column": "ФИО",
+        "literal": ""
+      },
+      "timeout": 10.0
+    },
+    {
+      "action": "set_value",
+      "target": {
+        "backend": "uia",
+        "window_title": "Карточка сотрудника — тест Win Automator",
+        "automation_id": "txtBirthDate",
+        "control_type": "Edit",
+        "name": "Дата рождения"
+      },
+      "value": {
+        "source": "excel",
+        "column": "Дата рождения",
+        "literal": ""
+      },
+      "timeout": 10.0
+    },
+    {
+      "action": "select",
+      "target": {
+        "backend": "uia",
+        "window_title": "Карточка сотрудника — тест Win Automator",
+        "automation_id": "cmbDepartment",
+        "control_type": "ComboBox",
+        "name": "Отдел"
+      },
+      "value": {
+        "source": "excel",
+        "column": "Отдел",
+        "literal": ""
+      },
+      "timeout": 10.0
+    },
+    {
+      "action": "set_value",
+      "target": {
+        "backend": "uia",
+        "window_title": "Карточка сотрудника — тест Win Automator",
+        "automation_id": "txtPosition",
+        "control_type": "Edit",
+        "name": "Должность"
+      },
+      "value": {
+        "source": "excel",
+        "column": "Должность",
+        "literal": ""
+      },
+      "timeout": 10.0
+    },
+    {
+      "action": "click",
+      "target": {
+        "backend": "uia",
+        "window_title": "Карточка сотрудника — тест Win Automator",
+        "automation_id": "btnSave",
+        "control_type": "Button",
+        "name": "Сохранить"
+      },
+      "timeout": 10.0
+    }
+  ],
+  "mappings": {}
+}
