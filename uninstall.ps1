@@ -29,7 +29,7 @@ if ($RemoveUserData) {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $local 'WinAutomator')
 }
 
-Write-Host 'Win Automator удалён.' -ForegroundColor Green
+Write-Host 'Win Automator removed.' -ForegroundColor Green
 if (-not $RemoveUserData) {
-    Write-Host 'Сценарии и checkpoint сохранены. Для их удаления запустите uninstall.ps1 -RemoveUserData.'
+    Write-Host 'Scenarios and checkpoints were preserved. Use -RemoveUserData to delete them.'
 }
