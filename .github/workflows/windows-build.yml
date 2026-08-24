@@ -14,10 +14,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-and-build:
-    name: Windows x64 / Python 3.8
+  release-package:
+    name: Windows x64 release and installer
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
@@ -38,6 +38,32 @@ jobs:
           python -m pip install --disable-pip-version-check pip==24.3.1
           python -m pip install -r requirements-dev.txt
 
+      - name: Unit tests
+        shell: pwsh
+        run: python -m pytest -q
+
+      - name: Real UIA executor E2E
+        shell: pwsh
+        run: python .\scripts\e2e_ui_test.py
+
+      - name: Build complete offline dependency bundle
+        shell: pwsh
+        run: |
+          .\download-offline-deps.ps1 -Python (Get-Command python).Source -SkipBootstrap
+          if (-not (Test-Path 'offline\python-3.8.10-amd64.exe')) { throw 'Python installer missing from offline bundle.' }
+          if (-not (Test-Path 'offline\manifest.json')) { throw 'Offline manifest missing.' }
+          $manifest = Get-Content -Raw offline\manifest.json | ConvertFrom-Json
+          if (@($manifest.files).Count -lt 5) { throw 'Offline manifest has too few payload files.' }
+          if ((Get-ChildItem 'offline\wheels' -File).Count -lt 5) { throw 'Offline wheel set is unexpectedly small.' }
+
+      - name: Upload offline bundle for clean runner
+        uses: actions/upload-artifact@v7
+        with:
+          name: WinAutomator-offline-dependencies
+          path: offline
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
@@ -46,7 +72,7 @@ jobs:
         shell: pwsh
         run: .\build.ps1 -SkipBootstrap -RequireInstaller
 
-      - name: Verify release manifest and installer
+      - name: Verify release manifest, installer and normal GUI launch
         shell: pwsh
         run: |
           $version = (Get-Content -Raw VERSION).Trim()
@@ -60,6 +86,7 @@ jobs:
           if (-not (Test-Path 'dist\SHA256SUMS.txt')) { throw 'SHA256SUMS.txt missing.' }
 
           $installDir = Join-Path $env:RUNNER_TEMP "WinAutomator-$version-installed"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $installDir
           $installer = (Resolve-Path $setup).Path
           $p = Start-Process -FilePath $installer -ArgumentList @(
             '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$installDir`""
@@ -68,11 +95,27 @@ jobs:
 
           $installedExe = Join-Path $installDir 'WinAutomator.exe'
           if (-not (Test-Path $installedExe)) { throw "Installed executable missing: $installedExe" }
-          $smoke = Join-Path $env:RUNNER_TEMP 'installed-version.txt'
-          $p = Start-Process -FilePath $installedExe -ArgumentList @('--smoke-test', "`"$smoke`"") -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Installed EXE smoke-test failed with exit code $($p.ExitCode)." }
-          $installedVersion = (Get-Content -Raw $smoke).Trim()
-          if ($installedVersion -ne $version) { throw "Installed version mismatch: $installedVersion != $version" }
+
+          foreach ($mode in @('--smoke-test','--smoke-gui')) {
+            $reportPath = Join-Path $env:RUNNER_TEMP ((($mode -replace '^--','') -replace '-','_') + '.json')
+            Remove-Item -Force -ErrorAction SilentlyContinue $reportPath
+            $p = Start-Process -FilePath $installedExe -ArgumentList @($mode, "`"$reportPath`"") -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "Installed EXE $mode failed with exit code $($p.ExitCode)." }
+            if (-not (Test-Path $reportPath)) { throw "Installed EXE $mode did not create report." }
+            $report = Get-Content -Raw $reportPath | ConvertFrom-Json
+            if (-not $report.ok) { throw "Installed EXE $mode reported failed checks." }
+            if ($report.version -ne $version) { throw "Installed version mismatch: $($report.version) != $version" }
+          }
+
+          $live = Start-Process -FilePath $installedExe -PassThru
+          Start-Sleep -Seconds 3
+          if ($live.HasExited) { throw "Normal GUI launch failed with exit code $($live.ExitCode)." }
+          Stop-Process -Id $live.Id -Force
+
+          $uninstaller = Join-Path $installDir 'unins000.exe'
+          if (-not (Test-Path $uninstaller)) { throw 'Inno Setup uninstaller is missing.' }
+          $p = Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($p.ExitCode)." }
 
           Get-Content dist\SHA256SUMS.txt
 
@@ -83,6 +126,99 @@ jobs:
           path: |
             dist/WinAutomator-*-win-x64.zip
             dist/WinAutomator-*-Setup-win-x64.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  offline-deployment:
+    name: Air-gapped bootstrap, build and launch
+    needs: release-package
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout on fresh runner
+        uses: actions/checkout@v7
+
+      - name: Download offline dependency bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: WinAutomator-offline-dependencies
+          path: offline
+
+      - name: Verify artifact layout
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'offline\python-3.8.10-amd64.exe')) { throw 'Python installer missing after artifact download.' }
+          if (-not (Test-Path 'offline\manifest.json')) { throw 'Offline manifest missing after artifact download.' }
+          if ((Get-ChildItem 'offline\wheels' -File).Count -lt 5) { throw 'Offline wheels missing after artifact download.' }
+
+      - name: Fresh bootstrap with network deliberately unavailable
+        shell: pwsh
+        env:
+          HTTP_PROXY: http://127.0.0.1:9
+          HTTPS_PROXY: http://127.0.0.1:9
+          ALL_PROXY: http://127.0.0.1:9
+          PIP_NO_INDEX: '1'
+        run: |
+          .\bootstrap.ps1 -Offline -NoRun
+          if (-not (Test-Path '.runtime\python38\python.exe')) { throw 'Private Python runtime was not installed.' }
+          if (-not (Test-Path '.venv\Scripts\python.exe')) { throw 'Offline virtualenv was not created.' }
+          .\.venv\Scripts\python.exe .\scripts\self_test.py
+          .\.venv\Scripts\python.exe -m pytest -q
+
+      - name: Real UIA E2E from offline environment
+        shell: pwsh
+        env:
+          HTTP_PROXY: http://127.0.0.1:9
+          HTTPS_PROXY: http://127.0.0.1:9
+          ALL_PROXY: http://127.0.0.1:9
+          PIP_NO_INDEX: '1'
+        run: .\.venv\Scripts\python.exe .\scripts\e2e_ui_test.py
+
+      - name: Build portable package using offline dependencies only
+        shell: pwsh
+        env:
+          HTTP_PROXY: http://127.0.0.1:9
+          HTTPS_PROXY: http://127.0.0.1:9
+          ALL_PROXY: http://127.0.0.1:9
+          PIP_NO_INDEX: '1'
+        run: .\build.ps1 -Offline
+
+      - name: Extract and launch portable package on clean target path
+        shell: pwsh
+        run: |
+          $version = (Get-Content -Raw VERSION).Trim()
+          $zip = "dist\WinAutomator-$version-win-x64.zip"
+          if (-not (Test-Path $zip)) { throw "Offline-built portable archive missing: $zip" }
+
+          $target = Join-Path $env:RUNNER_TEMP 'WinAutomator-portable-target'
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $target
+          Expand-Archive -LiteralPath $zip -DestinationPath $target
+          $exe = Join-Path $target 'WinAutomator\WinAutomator.exe'
+          if (-not (Test-Path $exe)) { throw "Portable executable missing after extraction: $exe" }
+
+          foreach ($mode in @('--smoke-test','--smoke-gui')) {
+            $reportPath = Join-Path $env:RUNNER_TEMP ("offline-" + (($mode -replace '^--','') -replace '-','_') + '.json')
+            Remove-Item -Force -ErrorAction SilentlyContinue $reportPath
+            $p = Start-Process -FilePath $exe -ArgumentList @($mode, "`"$reportPath`"") -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "Portable EXE $mode failed with exit code $($p.ExitCode)." }
+            $report = Get-Content -Raw $reportPath | ConvertFrom-Json
+            if (-not $report.ok) { throw "Portable EXE $mode reported failed checks." }
+            if ($report.version -ne $version) { throw "Portable version mismatch: $($report.version) != $version" }
+          }
+
+          $live = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 3
+          if ($live.HasExited) { throw "Portable normal GUI launch failed with exit code $($live.ExitCode)." }
+          Stop-Process -Id $live.Id -Force
+
+      - name: Upload offline-verified portable package
+        uses: actions/upload-artifact@v7
+        with:
+          name: WinAutomator-${{ github.sha }}-offline-verified
+          path: |
+            dist/WinAutomator-*-win-x64.zip
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
