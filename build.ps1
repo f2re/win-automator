@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$SkipBootstrap,
     [switch]$RequireInstaller,
     [string]$Version = ''
