@@ -73,9 +73,11 @@ if ($Offline) {
 $runtimeOk = $false
 if (Test-Path $Python) {
     try {
-        $versionProbe = 'import platform,sys; print("{}.{}.{}|{}".format(sys.version_info[0],sys.version_info[1],sys.version_info[2],platform.architecture()[0]))'
+        # Deliberately avoid quotes inside the python -c payload: Windows PowerShell 5.1
+        # strips nested quotes when passing native-process arguments.
+        $versionProbe = 'import platform,sys; print(sys.version_info[0],sys.version_info[1],sys.version_info[2],platform.architecture()[0])'
         $detected = (& $Python -c $versionProbe).Trim()
-        $runtimeOk = ($LASTEXITCODE -eq 0 -and $detected -eq '3.8.10|64bit')
+        $runtimeOk = ($LASTEXITCODE -eq 0 -and $detected -eq '3 8 10 64bit')
     } catch {
         $runtimeOk = $false
     }
