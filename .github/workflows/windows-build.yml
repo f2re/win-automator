@@ -1,4 +1,4 @@
-name: Windows build
+name: Windows verified build
 
 on:
   push:
@@ -10,33 +10,85 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  verified-build:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.8'
-          cache: pip
-          cache-dependency-path: |
-            requirements-runtime.txt
-            requirements-dev.txt
-      - name: Install dependencies
-        shell: pwsh
+
+      - name: Online bootstrap from clean checkout
+        shell: powershell
         run: |
-          python -m pip install pip==24.3.1
-          python -m pip install -r requirements-dev.txt
-      - name: Tests
-        run: python -m pytest -q
-      - name: Build executable
-        shell: pwsh
+          .\bootstrap.ps1 -NoRun
+          if (-not (Test-Path '.runtime\python38\python.exe')) { throw 'Local Python runtime was not installed.' }
+          if (-not (Test-Path '.venv\Scripts\python.exe')) { throw 'Virtual environment was not created.' }
+
+      - name: Unit tests
+        shell: powershell
         run: |
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name WinAutomator --paths src --collect-submodules comtypes --hidden-import pywinauto.controls.uiawrapper app.py
-          Copy-Item README.md dist\WinAutomator\README.md
-          @{ version='0.1.0'; python='3.8'; built_at=(Get-Date).ToUniversalTime().ToString('o') } | ConvertTo-Json | Set-Content dist\WinAutomator\version.json -Encoding UTF8
-          Compress-Archive -Path dist\WinAutomator\* -DestinationPath dist\WinAutomator-win-x64.zip -Force
+          .\.venv\Scripts\python.exe -m pytest -q
+
+      - name: Real UIA executor E2E
+        shell: powershell
+        run: |
+          .\.venv\Scripts\python.exe .\scripts\e2e_ui_test.py
+
+      - name: Build complete offline bundle
+        shell: powershell
+        run: |
+          .\download-offline-deps.ps1
+          if (-not (Test-Path 'offline\python-3.8.10-amd64.exe')) { throw 'Python installer missing from offline bundle.' }
+          if (-not (Test-Path 'offline\manifest.json')) { throw 'Offline manifest missing.' }
+          if ((Get-ChildItem 'offline\wheels' -File).Count -lt 5) { throw 'Offline wheel set is unexpectedly small.' }
+
+      - name: Re-bootstrap with network deliberately unavailable
+        shell: powershell
+        env:
+          HTTP_PROXY: http://127.0.0.1:9
+          HTTPS_PROXY: http://127.0.0.1:9
+          ALL_PROXY: http://127.0.0.1:9
+        run: |
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue .runtime, .venv
+          .\bootstrap.ps1 -Offline -NoRun
+          .\.venv\Scripts\python.exe .\scripts\self_test.py
+          .\.venv\Scripts\python.exe -m pytest -q
+
+      - name: Build application using offline dependencies only
+        shell: powershell
+        env:
+          HTTP_PROXY: http://127.0.0.1:9
+          HTTPS_PROXY: http://127.0.0.1:9
+          ALL_PROXY: http://127.0.0.1:9
+        run: |
+          .\build.ps1 -Offline
+
+      - name: Install package into a clean target directory
+        shell: powershell
+        run: |
+          $zip = Get-ChildItem 'dist\WinAutomator-*-win-x64.zip' | Select-Object -First 1
+          if (-not $zip) { throw 'Distribution ZIP not found.' }
+          $package = Join-Path $env:RUNNER_TEMP 'win-automator-package'
+          $installed = Join-Path $env:RUNNER_TEMP 'win-automator-installed'
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $package, $installed
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $package
+          & (Join-Path $package 'install.ps1') -InstallDir $installed -NoShortcut -NoLaunch
+          if (-not (Test-Path (Join-Path $installed 'WinAutomator.exe'))) { throw 'Installed EXE not found.' }
+
+          $headless = Start-Process -FilePath (Join-Path $installed 'WinAutomator.exe') -ArgumentList '--smoke-test' -Wait -PassThru
+          if ($headless.ExitCode -ne 0) { throw "Installed headless smoke failed: $($headless.ExitCode)" }
+
+          $gui = Start-Process -FilePath (Join-Path $installed 'WinAutomator.exe') -ArgumentList '--smoke-gui' -Wait -PassThru
+          if ($gui.ExitCode -ne 0) { throw "Installed GUI smoke failed: $($gui.ExitCode)" }
+
+          $live = Start-Process -FilePath (Join-Path $installed 'WinAutomator.exe') -PassThru
+          Start-Sleep -Seconds 3
+          if ($live.HasExited) { throw "Normal application launch failed with exit code $($live.ExitCode)" }
+          Stop-Process -Id $live.Id -Force
+
+          & (Join-Path $package 'uninstall.ps1') -InstallDir $installed
+          if (Test-Path $installed) { throw 'Uninstall did not remove target directory.' }
+
       - uses: actions/upload-artifact@v7
         with:
-          name: WinAutomator-win-x64
-          path: dist/WinAutomator-win-x64.zip
+          name: WinAutomator-verified-win-x64
+          path: dist/WinAutomator-*-win-x64.zip
           if-no-files-found: error
