@@ -35,7 +35,7 @@ Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $staging, $backup
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 
 Write-Step 'Копирование файлов приложения'
-Copy-Item -LiteralPath (Join-Path $SourceDir '*') -Destination $staging -Recurse -Force
+Copy-Item -Path (Join-Path $SourceDir '*') -Destination $staging -Recurse -Force
 
 $StagedExe = Join-Path $staging 'WinAutomator.exe'
 Write-Step 'Проверка собранного приложения до установки'
