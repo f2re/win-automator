@@ -10,6 +10,22 @@ Set-StrictMode -Version 2.0
 
 function Write-Step([string]$Text) { Write-Host "`n==> $Text" -ForegroundColor Cyan }
 
+function Invoke-SmokeWithTimeout {
+    param(
+        [Parameter(Mandatory=$true)][string]$FilePath,
+        [int]$TimeoutSeconds = 30
+    )
+    $process = Start-Process -FilePath $FilePath -ArgumentList '--smoke-test' -PassThru
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $process.Kill() } catch {}
+        try { $process.WaitForExit() } catch {}
+        throw "Smoke-test timed out after $TimeoutSeconds seconds: $FilePath"
+    }
+    if ($process.ExitCode -ne 0) {
+        throw "Smoke-test failed with exit code $($process.ExitCode): $FilePath"
+    }
+}
+
 if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Installer is for Windows only.' }
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'Win Automator requires Windows x64.' }
 
@@ -39,10 +55,11 @@ Copy-Item -Path (Join-Path $SourceDir '*') -Destination $staging -Recurse -Force
 
 $StagedExe = Join-Path $staging 'WinAutomator.exe'
 Write-Step 'Verifying staged application'
-$smoke = Start-Process -FilePath $StagedExe -ArgumentList '--smoke-test' -Wait -PassThru
-if ($smoke.ExitCode -ne 0) {
+try {
+    Invoke-SmokeWithTimeout -FilePath $StagedExe
+} catch {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $staging
-    throw "Staged smoke-test failed with exit code $($smoke.ExitCode). Install cancelled."
+    throw
 }
 
 Write-Step 'Installing atomically'
@@ -58,11 +75,12 @@ try {
 
 $InstalledExe = Join-Path $InstallDir 'WinAutomator.exe'
 Write-Step 'Verifying installed application'
-$smokeInstalled = Start-Process -FilePath $InstalledExe -ArgumentList '--smoke-test' -Wait -PassThru
-if ($smokeInstalled.ExitCode -ne 0) {
+try {
+    Invoke-SmokeWithTimeout -FilePath $InstalledExe
+} catch {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $InstallDir
     if (Test-Path -LiteralPath $backup) { Move-Item -LiteralPath $backup -Destination $InstallDir }
-    throw "Installed smoke-test failed with exit code $($smokeInstalled.ExitCode). Previous version restored."
+    throw
 }
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $backup
 
