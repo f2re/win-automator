@@ -1,0 +1,23 @@
+name: Улучшение
+description: Предложить новый сценарий автоматизации или UX-улучшение
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую проблему нужно решить
+      description: Опишите рабочий процесс оператора, а не только желаемую кнопку.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предлагаемое поведение
+    validations:
+      required: true
+  - type: textarea
+    id: app
+    attributes:
+      label: Целевое приложение
+      description: Тип интерфейса (Win32/WPF/Qt/Java/custom-rendered), версия Windows и доступность тестового стенда.

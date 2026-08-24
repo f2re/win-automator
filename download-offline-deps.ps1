@@ -1,3 +1,8 @@
+param(
+    [string]$Python = '',
+    [switch]$SkipBootstrap
+)
+
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Offline = Join-Path $Root 'offline'
@@ -11,8 +16,25 @@ if (-not (Test-Path $pythonInstaller)) {
 }
 $md5 = (Get-FileHash $pythonInstaller -Algorithm MD5).Hash.ToUpperInvariant()
 if ($md5 -ne '62CF1A12A5276B0259E8761D4CF4FE42') { throw 'Python installer checksum mismatch.' }
+$sig = Get-AuthenticodeSignature -FilePath $pythonInstaller
+if ($sig.Status -ne 'Valid') { throw "Python installer signature is not valid: $($sig.Status)" }
 
-& (Join-Path $Root 'bootstrap.ps1') -NoRun
-$python = Join-Path $Root '.venv\Scripts\python.exe'
-& $python -m pip download --dest $Wheels -r (Join-Path $Root 'requirements-dev.txt')
-Write-Host "Offline bundle подготовлен: $Offline" -ForegroundColor Green
+if ([string]::IsNullOrWhiteSpace($Python)) {
+    if ($SkipBootstrap) {
+        $Python = (Get-Command python -ErrorAction Stop).Source
+    } else {
+        & (Join-Path $Root 'bootstrap.ps1') -NoRun
+        $Python = Join-Path $Root '.venv\Scripts\python.exe'
+    }
+}
+& $Python -m pip download --dest $Wheels -r (Join-Path $Root 'requirements-dev.txt')
+if ($LASTEXITCODE -ne 0) { throw 'pip download failed.' }
+
+@{
+    created_at = (Get-Date).ToUniversalTime().ToString('o')
+    python = '3.8.10'
+    requirements_runtime = (Get-Content -Raw (Join-Path $Root 'requirements-runtime.txt')).Trim()
+    requirements_dev = (Get-Content -Raw (Join-Path $Root 'requirements-dev.txt')).Trim()
+} | ConvertTo-Json | Set-Content (Join-Path $Offline 'manifest.json') -Encoding UTF8
+
+Write-Host "Offline dependencies prepared: $Offline" -ForegroundColor Green
