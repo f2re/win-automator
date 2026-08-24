@@ -4,6 +4,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
+from .excel_source import format_like_sample, normalize
 from .inspector import resolve
 from .models import Scenario, Step
 
@@ -48,25 +49,56 @@ class Executor:
         value = step.value.resolve(row)
         if step.value.source == "excel":
             mapping = scenario.mappings.get(step.value.column, {})
-            return mapping.get(str(value), value)
+            mapped = mapping.get(str(value))
+            if mapped is not None:
+                return mapped
+            return format_like_sample(value, step.value.literal)
         return value
+
+    @staticmethod
+    def _read_value(wrapper):
+        for getter_name in ("get_value", "window_text"):
+            try:
+                getter = getattr(wrapper, getter_name)
+                value = getter() if callable(getter) else getter
+                if value is not None:
+                    return value
+            except Exception:
+                pass
+        try:
+            texts = wrapper.texts()
+            if texts:
+                return texts[0]
+        except Exception:
+            pass
+        return None
+
+    def _value_matches(self, wrapper, expected: str) -> bool:
+        actual = self._read_value(wrapper)
+        if actual is None:
+            return True  # control does not expose a readable value; do not false-fail
+        return normalize(actual) == normalize(expected)
 
     def _set_value(self, wrapper, value: Any) -> None:
         text = "" if value is None else str(value)
         try:
             wrapper.set_edit_text(text)
-            return
+            if self._value_matches(wrapper, text):
+                return
         except Exception:
             pass
         try:
             wrapper.set_text(text)
-            return
+            if self._value_matches(wrapper, text):
+                return
         except Exception:
             pass
         wrapper.click_input()
         from pywinauto.keyboard import send_keys
 
         send_keys("^a{BACKSPACE}" + _escape_send_keys(text), with_spaces=True, pause=0.01)
+        if not self._value_matches(wrapper, text):
+            raise RuntimeError("Поле не приняло значение '{}'".format(text))
 
     def _select(self, wrapper, value: Any) -> None:
         text = "" if value is None else str(value)
@@ -79,11 +111,26 @@ class Executor:
             wrapper.expand()
             for item in wrapper.descendants(control_type="ListItem"):
                 if item.window_text().strip().casefold() == text.strip().casefold():
-                    item.select()
+                    try:
+                        item.select()
+                    except Exception:
+                        item.click_input()
                     return
         except Exception:
             pass
         raise RuntimeError("В списке не найдено значение '{}'".format(text))
+
+    @staticmethod
+    def _click(wrapper) -> None:
+        # click_input returns after the physical click even if the handler opens a
+        # modal dialog. InvokePattern can stay blocked until ShowDialog returns,
+        # which would deadlock the following scenario step.
+        try:
+            wrapper.click_input()
+            return
+        except Exception:
+            pass
+        wrapper.invoke()
 
     def execute_step(self, scenario: Scenario, step: Step, row: Dict[str, Any]) -> None:
         action = step.action.casefold()
@@ -106,10 +153,7 @@ class Executor:
             pass
 
         if action == "click":
-            try:
-                wrapper.invoke()
-            except Exception:
-                wrapper.click_input()
+            self._click(wrapper)
         elif action == "double_click":
             wrapper.double_click_input()
         elif action == "set_value":
