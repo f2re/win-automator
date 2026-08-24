@@ -1,0 +1,11 @@
+.venv/
+.runtime/
+offline/
+build/
+dist/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.log
+*.sqlite3
+sample-data.xlsx
