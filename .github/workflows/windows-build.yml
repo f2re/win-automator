@@ -78,6 +78,7 @@ jobs:
           HTTP_PROXY: http://127.0.0.1:9
           HTTPS_PROXY: http://127.0.0.1:9
           ALL_PROXY: http://127.0.0.1:9
+          PIP_NO_INDEX: '1'
         run: |
           .\bootstrap.ps1 -Offline -NoRun
           .\.venv\Scripts\python.exe .\scripts\self_test.py
@@ -89,6 +90,7 @@ jobs:
           HTTP_PROXY: http://127.0.0.1:9
           HTTPS_PROXY: http://127.0.0.1:9
           ALL_PROXY: http://127.0.0.1:9
+          PIP_NO_INDEX: '1'
         run: .\.venv\Scripts\python.exe .\scripts\e2e_ui_test.py
 
       - name: Build application using offline dependencies only
@@ -97,6 +99,7 @@ jobs:
           HTTP_PROXY: http://127.0.0.1:9
           HTTPS_PROXY: http://127.0.0.1:9
           ALL_PROXY: http://127.0.0.1:9
+          PIP_NO_INDEX: '1'
         run: .\build.ps1 -Offline
 
       - name: Install package into a clean target directory and launch it
@@ -122,7 +125,12 @@ jobs:
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $package, $installed
           Expand-Archive -LiteralPath $zip.FullName -DestinationPath $package
 
-          & (Join-Path $package 'install.ps1') -InstallDir $installed -NoShortcut -NoLaunch
+          foreach ($required in @('install.cmd','install.ps1','uninstall.cmd','uninstall.ps1','WinAutomator\WinAutomator.exe')) {
+            if (-not (Test-Path (Join-Path $package $required))) { throw "Package file missing: $required" }
+          }
+
+          & (Join-Path $package 'install.cmd') -InstallDir $installed -NoShortcut -NoLaunch
+          if ($LASTEXITCODE -ne 0) { throw "install.cmd failed with exit code $LASTEXITCODE" }
           if (-not (Test-Path (Join-Path $installed 'WinAutomator.exe'))) { throw 'Installed EXE not found.' }
 
           $exe = Join-Path $installed 'WinAutomator.exe'
@@ -134,7 +142,8 @@ jobs:
           if ($live.HasExited) { throw "Normal application launch failed with exit code $($live.ExitCode)" }
           Stop-Process -Id $live.Id -Force
 
-          & (Join-Path $package 'uninstall.ps1') -InstallDir $installed
+          & (Join-Path $package 'uninstall.cmd') -InstallDir $installed
+          if ($LASTEXITCODE -ne 0) { throw "uninstall.cmd failed with exit code $LASTEXITCODE" }
           if (Test-Path $installed) { throw 'Uninstall did not remove target directory.' }
 
       - name: Upload verified distribution
