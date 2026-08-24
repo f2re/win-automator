@@ -60,16 +60,16 @@ def main() -> int:
         )
         try:
             desktop = Desktop(backend="uia")
-            window = desktop.window(title="Карточка сотрудника — тест Win Automator")
+            window = desktop.window(title="Win Automator E2E Target")
             window.wait("exists enabled visible ready", timeout=15)
             top = window.wrapper_object()
 
             fields = {
-                "ФИО": _find(top, "Edit", "ФИО"),
-                "Дата рождения": _find(top, "Edit", "Дата рождения"),
-                "Отдел": _find(top, "ComboBox", "Отдел"),
-                "Должность": _find(top, "Edit", "Должность"),
-                "Сохранить": _find(top, "Button", "Сохранить"),
+                "Full Name": _find(top, "Edit", "Full Name"),
+                "Birth Date": _find(top, "Edit", "Birth Date"),
+                "Department": _find(top, "ComboBox", "Department"),
+                "Position": _find(top, "Edit", "Position"),
+                "Save": _find(top, "Button", "Save"),
             }
 
             scenario = Scenario(
@@ -77,34 +77,34 @@ def main() -> int:
                 steps=[
                     Step(
                         action="set_value",
-                        target=selector_from_wrapper(fields["ФИО"], "uia"),
+                        target=selector_from_wrapper(fields["Full Name"], "uia"),
                         value=ValueSpec(source="excel", column="ФИО"),
                     ),
                     Step(
                         action="set_value",
-                        target=selector_from_wrapper(fields["Дата рождения"], "uia"),
+                        target=selector_from_wrapper(fields["Birth Date"], "uia"),
                         value=ValueSpec(source="excel", column="Дата рождения"),
                     ),
                     Step(
                         action="select",
-                        target=selector_from_wrapper(fields["Отдел"], "uia"),
+                        target=selector_from_wrapper(fields["Department"], "uia"),
                         value=ValueSpec(source="excel", column="Отдел"),
                     ),
                     Step(
                         action="set_value",
-                        target=selector_from_wrapper(fields["Должность"], "uia"),
+                        target=selector_from_wrapper(fields["Position"], "uia"),
                         value=ValueSpec(source="excel", column="Должность"),
                     ),
                     Step(
                         action="click",
-                        target=selector_from_wrapper(fields["Сохранить"], "uia"),
+                        target=selector_from_wrapper(fields["Save"], "uia"),
                     ),
                 ],
             )
             row = {
                 "ФИО": "Иванов Иван Иванович",
                 "Дата рождения": "01.08.2000",
-                "Отдел": "ОМН",
+                "Отдел": "OMN",
                 "Должность": "Инженер-метеоролог",
             }
             result = Executor().run(scenario, row)
@@ -130,7 +130,7 @@ def main() -> int:
             proc.wait(timeout=10)
             if proc.returncode != 0:
                 raise RuntimeError("TargetForm exited with code {}".format(proc.returncode))
-            print("UIA E2E OK: form filled, ComboBox selected and Save invoked")
+            print("UIA E2E OK: Unicode text filled, ComboBox selected and Save invoked")
             return 0
         finally:
             if proc.poll() is None:
