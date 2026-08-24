@@ -16,6 +16,7 @@ jobs:
   prepare-online:
     name: Prepare and verify online bundle
     runs-on: windows-2022
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -54,6 +55,7 @@ jobs:
     name: Fresh offline deployment and launch
     needs: prepare-online
     runs-on: windows-2022
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -100,6 +102,19 @@ jobs:
       - name: Install package into a clean target directory and launch it
         shell: powershell
         run: |
+          function Invoke-ExeCheck {
+            param([string]$FilePath, [string]$Argument, [int]$TimeoutSeconds = 30)
+            $process = Start-Process -FilePath $FilePath -ArgumentList $Argument -PassThru
+            if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+              try { $process.Kill() } catch {}
+              try { $process.WaitForExit() } catch {}
+              throw "Process timed out: $FilePath $Argument"
+            }
+            if ($process.ExitCode -ne 0) {
+              throw "Process failed with exit code $($process.ExitCode): $FilePath $Argument"
+            }
+          }
+
           $zip = Get-ChildItem 'dist\WinAutomator-*-win-x64.zip' | Select-Object -First 1
           if (-not $zip) { throw 'Distribution ZIP not found.' }
           $package = Join-Path $env:RUNNER_TEMP 'win-automator-package'
@@ -110,13 +125,11 @@ jobs:
           & (Join-Path $package 'install.ps1') -InstallDir $installed -NoShortcut -NoLaunch
           if (-not (Test-Path (Join-Path $installed 'WinAutomator.exe'))) { throw 'Installed EXE not found.' }
 
-          $headless = Start-Process -FilePath (Join-Path $installed 'WinAutomator.exe') -ArgumentList '--smoke-test' -Wait -PassThru
-          if ($headless.ExitCode -ne 0) { throw "Installed headless smoke failed: $($headless.ExitCode)" }
+          $exe = Join-Path $installed 'WinAutomator.exe'
+          Invoke-ExeCheck -FilePath $exe -Argument '--smoke-test'
+          Invoke-ExeCheck -FilePath $exe -Argument '--smoke-gui'
 
-          $gui = Start-Process -FilePath (Join-Path $installed 'WinAutomator.exe') -ArgumentList '--smoke-gui' -Wait -PassThru
-          if ($gui.ExitCode -ne 0) { throw "Installed GUI smoke failed: $($gui.ExitCode)" }
-
-          $live = Start-Process -FilePath (Join-Path $installed 'WinAutomator.exe') -PassThru
+          $live = Start-Process -FilePath $exe -PassThru
           Start-Sleep -Seconds 3
           if ($live.HasExited) { throw "Normal application launch failed with exit code $($live.ExitCode)" }
           Stop-Process -Id $live.Id -Force
