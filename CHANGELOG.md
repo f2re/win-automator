@@ -2,6 +2,24 @@
 
 Все заметные изменения проекта фиксируются здесь. Формат близок к Keep a Changelog; версии следуют Semantic Versioning.
 
+## [0.3.1] - 2026-08-25
+
+### Fixed
+- операторский offline-путь больше не смешивается с developer bootstrap: для изолированной машины создаётся отдельный полностью готовый `FULL-OFFLINE` пакет;
+- доказательство air-gap больше не основано только на `HTTP_PROXY`: installer и оба application EXE дополнительно получают Windows Firewall outbound `BLOCK` во время проверки;
+- финальный portable/installed запуск теперь проверяется с реально заблокированным исходящим сетевым доступом;
+- системный Python и сторонние инструменты исключаются из `PATH` во время строгого target-test;
+- GitHub Release больше не публикуется до успешной проверки точного FULL-OFFLINE release candidate.
+
+### Added
+- `WinAutomator-<version>-FULL-OFFLINE-win-x64.zip` с готовым Setup и готовым portable runtime;
+- `INSTALL.cmd` и `RUN-PORTABLE.cmd` как простые точки входа для машины без Интернета;
+- `OFFLINE-MANIFEST.json` с размером и SHA-256 каждого внутреннего payload-файла;
+- `VERIFY-OFFLINE.ps1` для локальной проверки целостности и packaged smoke-test перед запуском;
+- `scripts/verify-airgap-release.ps1` для строгого install/launch/uninstall теста на чистом Windows runner;
+- `AIRGAP-VERIFICATION.json` как машинно-читаемое доказательство каждого опубликованного release;
+- release pipeline `build -> airgap-verify -> publish`.
+
 ## [0.3.0] - 2026-08-25
 
 ### Added

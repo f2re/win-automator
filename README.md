@@ -3,25 +3,71 @@
 [![CI](https://github.com/f2re/win-automator/actions/workflows/windows-build.yml/badge.svg)](https://github.com/f2re/win-automator/actions/workflows/windows-build.yml)
 [![Release](https://img.shields.io/github/v/release/f2re/win-automator?sort=semver)](https://github.com/f2re/win-automator/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/f2re/win-automator/total)](https://github.com/f2re/win-automator/releases)
-![Windows](https://img.shields.io/badge/Windows-7%20SP1%20%7C%2010%20%7C%2011-0078D6?logo=windows)
-![Python](https://img.shields.io/badge/dev%20runtime-Python%203.8.10-3776AB?logo=python&logoColor=white)
+![Windows](https://img.shields.io/badge/Windows-x64-0078D6?logo=windows)
+![Offline](https://img.shields.io/badge/FULL--OFFLINE-air--gap%20verified-success)
 
-**Win Automator** — обучаемый автоматизатор ввода данных из Excel в формы Windows-приложений. Оператор один раз показывает, как заполнить запись; программа связывает действия с колонками Excel и смысловыми UI Automation / Win32-элементами, после чего воспроизводит сценарий для остальных строк.
+**Win Automator** — обучаемый автоматизатор ввода данных из Excel в формы Windows-приложений. Оператор один раз показывает, как заполнить запись; программа связывает действия с колонками Excel и устойчивыми UI Automation / Win32-признаками элементов, после чего воспроизводит сценарий для остальных строк.
 
-> Для обычного оператора Python и установка библиотек не нужны. Берите готовый `Setup.exe` или portable ZIP из [последнего релиза](https://github.com/f2re/win-automator/releases/latest).
+> **Компьютер без Интернета:** скачайте `WinAutomator-<version>-FULL-OFFLINE-win-x64.zip`. Это готовый операторский пакет: внутри уже есть Setup, portable runtime, локальная проверка SHA-256 и packaged smoke-test. Python, pip и догрузка зависимостей на целевой машине не нужны.
 
-## Скачать и запустить
+## Скачать
 
-| Вариант | Для кого | Что делать |
+| Файл release | Назначение | Запуск |
 |---|---|---|
-| `WinAutomator-<version>-Setup-win-x64.exe` | обычный пользователь | скачать → запустить установщик → открыть Win Automator |
-| `WinAutomator-<version>-win-x64.zip` | portable / без установки | распаковать → запустить `WinAutomator.exe` |
-| `WinAutomator-<version>-offline-dev.zip` | закрытая сеть / разработчик | распаковать → `bootstrap.ps1 -Offline` |
-| `SHA256SUMS.txt` | проверка целостности | сверить SHA-256 скачанных файлов |
+| `WinAutomator-<version>-FULL-OFFLINE-win-x64.zip` | **изолированная Windows без Интернета** | распаковать → `INSTALL.cmd` |
+| `WinAutomator-<version>-Setup-win-x64.exe` | обычная установка | запустить Setup |
+| `WinAutomator-<version>-win-x64.zip` | portable | распаковать весь каталог → `WinAutomator.exe` |
+| `WinAutomator-<version>-offline-dev.zip` | разработка/диагностика в закрытой сети | `bootstrap.ps1 -Offline` |
+| `AIRGAP-VERIFICATION.json` | доказательство offline-теста release | машинно-читаемый отчёт |
+| `SHA256SUMS.txt` | контроль целостности | сверить SHA-256 |
 
-Установщик ставится в профиль пользователя и не требует прав администратора. Минимальная целевая ОС — **Windows 7 SP1 x64**; основной тестовый путь — Windows 10 x64.
+### FULL-OFFLINE: что внутри
 
-## Как это работает
+```text
+WinAutomator-<version>-FULL-OFFLINE\
+├── INSTALL.cmd
+├── RUN-PORTABLE.cmd
+├── VERIFY-OFFLINE.ps1
+├── OFFLINE-MANIFEST.json
+├── README-OFFLINE.txt
+├── setup\
+│   └── WinAutomator-<version>-Setup-win-x64.exe
+└── portable\
+    └── WinAutomator\
+        ├── WinAutomator.exe
+        └── ... встроенный Python runtime, DLL, Tcl/Tk и библиотеки
+```
+
+Перед установкой `INSTALL.cmd` проверяет SHA-256 каждого файла и запускает smoke-test уже упакованного приложения. Никаких `pip install`, PyPI, `winget`, Chocolatey или скачивания Python на целевой машине нет.
+
+Подробнее: [docs/INSTALL.md](docs/INSTALL.md).
+
+## Air-gap гарантия release
+
+Release публикуется по цепочке:
+
+```mermaid
+flowchart LR
+    V["VERSION"] --> B["Build + tests"]
+    B --> P["Setup + portable + FULL-OFFLINE"]
+    P --> A["Fresh Windows air-gap verifier"]
+    A -->|pass| R["GitHub Release"]
+    A -->|fail| X["Release blocked"]
+```
+
+Проверяется **точный FULL-OFFLINE ZIP**, который затем публикуется. На чистом Windows runner:
+
+- installer и application EXE получают Windows Firewall outbound `BLOCK`;
+- `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` направляются на недоступный локальный endpoint;
+- системный Python и сторонние инструменты исключаются из `PATH`;
+- проверяется внутренний SHA-256 manifest;
+- выполняются portable smoke, GUI smoke и обычный запуск;
+- выполняются silent install, installed smoke, GUI smoke и обычный запуск;
+- выполняется uninstall.
+
+Только после успеха создаётся `AIRGAP-VERIFICATION.json` и разрешается job публикации release.
+
+## Как работает автоматизация
 
 ```mermaid
 flowchart LR
@@ -30,7 +76,7 @@ flowchart LR
     T --> R["Semantic Recorder"]
     R --> I["UIA / Win32 Inspector"]
     I --> S["Versioned Scenario JSON"]
-    S --> E["Редактор и повторный захват"]
+    S --> E["Редактор / повторный захват"]
     E --> V["Проверка на следующей строке"]
     V --> B["Пакетное выполнение"]
     B --> C["Checkpoint SQLite"]
@@ -39,36 +85,54 @@ flowchart LR
 
 Win Automator старается запоминать не координаты экрана, а признаки элемента: `AutomationId`, `ControlId`, тип контрола, имя, класс, родителя и окно. Это делает сценарий устойчивее к перемещению окна и небольшим изменениям интерфейса.
 
-## Быстрый рабочий сценарий
+## Рабочий сценарий
 
 1. Откройте вкладку **Данные** и выберите `.xlsx`.
 2. Выберите лист и проверьте строки в предпросмотре.
 3. На вкладке **Сценарий** нажмите **Обучить на первой записи**.
 4. В целевой программе вручную заполните одну запись.
 5. `F8` — пауза/продолжение записи, `F9` — закончить обучение.
-6. Проверьте сформированные шаги; при необходимости исправьте поле или выполните **Указать заново**.
+6. Проверьте шаги и при необходимости выполните **Указать заново**.
 7. Выполните тест на следующей строке.
-8. Запустите пакетную обработку. При ошибке используется checkpoint, поэтому задание можно продолжить с проблемной строки.
+8. Запустите пакетную обработку. При ошибке checkpoint позволяет продолжить с проблемной строки.
 
-## Возможности 0.2
+## Возможности 0.3
 
 - чтение `.xlsx` без установленного Microsoft Excel;
 - запись глобальных действий мыши и клавиатуры;
-- UI Automation + Win32 fingerprint вместо жесткой привязки к координатам;
+- UI Automation + Win32 fingerprint вместо жёсткой привязки к координатам;
 - `SET_VALUE`, `SELECT`, `CLICK`, `DOUBLE_CLICK`, `KEY`, `CLOSE_WINDOW`, `START_APP`;
-- автоматическое сопоставление введенного значения с колонкой Excel;
+- автоматическое сопоставление введённого значения с колонкой Excel;
 - визуальный редактор шагов и повторный захват контрола;
 - проверка сценария перед массовым запуском;
-- пакетная обработка с паузой, остановкой, retry и checkpoint в SQLite;
+- пакетная обработка с паузой, retry и SQLite checkpoint;
 - автономный Windows x64 executable;
-- установщик без прав администратора;
+- per-user Inno Setup installer без обязательных прав администратора;
 - portable ZIP;
+- **FULL-OFFLINE операторский пакет**;
 - air-gapped developer bundle с Python 3.8.10 и wheels;
-- CI, SemVer, автоматические GitHub Releases, SHA-256 и build provenance attestations.
+- режим структурированного сбора отладки;
+- CI, SemVer, GitHub Releases, SHA-256, provenance attestations и air-gap proof.
+
+## Сбор отладки
+
+Для воспроизводимых проблем интерфейса есть отдельный режим:
+
+```text
+Win Automator — сбор отладки
+```
+
+или portable:
+
+```powershell
+.\WinAutomator.exe --debug-capture
+```
+
+Режим фиксирует пользовательский таймлайн, решения Recorder/Executor, resolver scoring и UIA/Win32 snapshots. Значения полей и скриншоты выключены по умолчанию. Подробно: [docs/DEBUG.md](docs/DEBUG.md).
 
 ## Пример
 
-Готовый учебный комплект находится в [`examples/employee-entry`](examples/employee-entry):
+Учебный комплект находится в [`examples/employee-entry`](examples/employee-entry):
 
 ```text
 examples/employee-entry/
@@ -77,13 +141,11 @@ examples/employee-entry/
 └── scenario.json
 ```
 
-Он рассчитан на тестовую WinForms-форму:
+Тестовая WinForms-форма:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\TargetForm.ps1
 ```
-
-После запуска формы откройте `sample-data.xlsx`, обучите сценарий на первой строке и проверьте выполнение на следующих.
 
 Подробнее: [docs/EXAMPLES.md](docs/EXAMPLES.md).
 
@@ -114,7 +176,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\TargetForm.ps1
 }
 ```
 
-Формат versioned: изменения, которые нарушают обратную совместимость сценариев, должны сопровождаться миграцией и изменением версии схемы.
+Формат versioned: несовместимые изменения сопровождаются миграцией и изменением версии схемы.
 
 ## Архитектура
 
@@ -131,17 +193,15 @@ flowchart TB
     EXEC --> STORE["SQLite checkpoint"]
 ```
 
-Подробное описание компонентов, selector scoring и границ MVP: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Подробнее: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Разработка
 
-Windows PowerShell:
+Online bootstrap:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\bootstrap.ps1
 ```
-
-Скрипт использует приватный Python 3.8.10 в `.runtime`, создает `.venv`, устанавливает зафиксированные зависимости, выполняет self-test и запускает приложение. Системный `PATH` не меняется.
 
 Сборка:
 
@@ -149,50 +209,47 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\bootstrap.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-Если установлен Inno Setup 6, дополнительно будет создан `Setup.exe`. В CI установщик обязателен.
-
-## Релизы и версионирование
-
-`VERSION` — единственный источник версии. Проект следует **Semantic Versioning**:
-
-- `PATCH` — исправление без изменения публичного поведения;
-- `MINOR` — совместимое расширение функций;
-- `MAJOR` — несовместимое изменение сценариев, данных или пользовательского контракта.
-
-Новая версия задается командой:
+Offline developer bootstrap:
 
 ```powershell
-.\scripts\set-version.ps1 0.2.1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\bootstrap.ps1 -Offline
 ```
 
-После commit + push изменения `VERSION` в `main` workflow **Release** автоматически:
-
-```mermaid
-flowchart LR
-    V["VERSION changed"] --> T["tests"]
-    T --> P["PyInstaller"]
-    P --> S["EXE smoke-test"]
-    S --> I["Inno Setup"]
-    I --> O["offline-dev bundle"]
-    O --> H["SHA-256"]
-    H --> A["GitHub attestation"]
-    A --> R["tag + GitHub Release"]
-```
-
-Повторная публикация уже существующей версии запрещена: нужно повысить `VERSION`. Полный процесс: [docs/RELEASES.md](docs/RELEASES.md).
-
-## Проверка скачанного релиза
+Offline developer build из заранее подготовленного dependency bundle:
 
 ```powershell
-Get-FileHash .\WinAutomator-0.2.0-Setup-win-x64.exe -Algorithm SHA256
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Offline
+```
+
+## Версионирование
+
+`VERSION` — единственный источник версии. Проект следует Semantic Versioning.
+
+```powershell
+.\scripts\set-version.ps1 0.3.1
+```
+
+Повторная публикация существующей версии запрещена. Полный процесс: [docs/RELEASES.md](docs/RELEASES.md).
+
+## Проверка скачанного FULL-OFFLINE release
+
+Внешний SHA-256 архива:
+
+```powershell
+Get-FileHash .\WinAutomator-0.3.1-FULL-OFFLINE-win-x64.zip -Algorithm SHA256
 Get-Content .\SHA256SUMS.txt
 ```
 
-Для публичных release assets workflow также создает GitHub artifact attestation, позволяющую проверить происхождение сборки.
+После распаковки — внутренняя проверка всего payload:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\VERIFY-OFFLINE.ps1 -Smoke
+```
 
 ## Документация
 
-- [Установка и offline-развертывание](docs/INSTALL.md)
+- [Установка и FULL-OFFLINE](docs/INSTALL.md)
+- [Сбор отладки](docs/DEBUG.md)
 - [Примеры](docs/EXAMPLES.md)
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Версионирование и релизы](docs/RELEASES.md)
@@ -203,11 +260,7 @@ Get-Content .\SHA256SUMS.txt
 ## Ограничения
 
 - Во время автоматического ввода не следует параллельно работать мышью/клавиатурой в другом приложении.
-- Custom-drawn controls могут быть невидимы для UIA/Win32. OCR/image matching пока не входят в базовый движок.
-- Recorder ориентирован на стандартные Edit/Button/ComboBox и близкие элементы. Составные контролы могут потребовать ручной коррекции.
-- Python 3.8 завершил upstream-поддержку; он используется как совместимый build/runtime путь для Windows 7. Конечный оператор получает автономный пакет.
-- Release EXE/installer пока не подписан коммерческим Authenticode-сертификатом; Windows SmartScreen может показывать предупреждение. Целостность подтверждается SHA-256 и GitHub build provenance.
-
-## Статус
-
-Проект находится на стадии рабочего прототипа. Основной следующий этап — испытания Recorder/Inspector/Executor на реальных целевых Windows-приложениях и добавление fallback-механизмов только там, где UIA/Win32 объективно недостаточно.
+- Custom-drawn controls могут быть невидимы для UIA/Win32; OCR/image matching пока не входят в базовый движок.
+- Если целевое приложение запущено с повышенными правами, Windows UIPI может потребовать сопоставимый уровень целостности Win Automator.
+- Python 3.8 используется как совместимый build/runtime путь; конечный оператор получает автономный пакет.
+- Release EXE/installer пока не подписан коммерческим Authenticode-сертификатом; Windows SmartScreen может показывать предупреждение. Целостность подтверждается SHA-256 и GitHub provenance/air-gap proof.

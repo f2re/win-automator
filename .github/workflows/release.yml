@@ -17,10 +17,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Build and publish Windows release
+  build:
+    name: Build release candidate
     runs-on: windows-2022
-    timeout-minutes: 35
+    timeout-minutes: 40
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
 
     steps:
       - name: Checkout
@@ -66,11 +69,17 @@ jobs:
           python -m pip install --disable-pip-version-check pip==24.3.1
           python -m pip install -r requirements-dev.txt
 
+      - name: Unit and UIA tests
+        shell: pwsh
+        run: |
+          python -m pytest -q
+          python .\scripts\e2e_ui_test.py
+
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
 
-      - name: Build portable package and installer
+      - name: Build portable, installer and FULL-OFFLINE bundle
         shell: pwsh
         run: .\build.ps1 -SkipBootstrap -RequireInstaller -Version "${{ steps.version.outputs.version }}"
 
@@ -79,7 +88,7 @@ jobs:
         run: |
           .\download-offline-deps.ps1 -Python (Get-Command python).Source -SkipBootstrap
           $version = "${{ steps.version.outputs.version }}"
-          $stageRoot = Join-Path $PWD "dist\offline-stage"
+          $stageRoot = Join-Path $PWD "dist\offline-dev-stage"
           $stage = Join-Path $stageRoot "WinAutomator-$version-offline-dev"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           git archive --format=zip HEAD -o dist\source.zip
@@ -98,51 +107,164 @@ jobs:
           }
           $lines | Set-Content dist\SHA256SUMS.txt -Encoding ASCII
 
-      - name: Attest release assets
+      - name: Assert release candidate layout
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $required = @(
+            "dist\WinAutomator-$version-win-x64.zip",
+            "dist\WinAutomator-$version-Setup-win-x64.exe",
+            "dist\WinAutomator-$version-FULL-OFFLINE-win-x64.zip",
+            "dist\WinAutomator-$version-offline-dev.zip",
+            "dist\SHA256SUMS.txt"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path)) { throw "Release candidate file missing: $path" }
+          }
+
+      - name: Upload immutable release candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: WinAutomator-${{ steps.version.outputs.version }}-release-candidate
+          path: |
+            dist/WinAutomator-*-win-x64.zip
+            dist/WinAutomator-*-Setup-win-x64.exe
+            dist/WinAutomator-*-offline-dev.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  airgap-verify:
+    name: Prove exact FULL-OFFLINE release candidate
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout verifier
+        uses: actions/checkout@v7
+
+      - name: Download exact release candidate
+        uses: actions/download-artifact@v8
+        with:
+          name: WinAutomator-${{ needs.build.outputs.version }}-release-candidate
+          path: dist
+
+      - name: Strict process-level network block, install and launch
+        shell: pwsh
+        run: |
+          $version = "${{ needs.build.outputs.version }}"
+          $package = "dist\WinAutomator-$version-FULL-OFFLINE-win-x64.zip"
+          .\scripts\verify-airgap-release.ps1 `
+            -PackagePath $package `
+            -ReportPath "dist\AIRGAP-VERIFICATION.json"
+
+      - name: Upload air-gap proof
+        uses: actions/upload-artifact@v7
+        with:
+          name: WinAutomator-${{ needs.build.outputs.version }}-airgap-proof
+          path: dist/AIRGAP-VERIFICATION.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish only after air-gap proof
+    needs: [build, airgap-verify]
+    runs-on: windows-2022
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout metadata
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download verified release candidate
+        uses: actions/download-artifact@v8
+        with:
+          name: WinAutomator-${{ needs.build.outputs.version }}-release-candidate
+          path: dist
+
+      - name: Download air-gap proof
+        uses: actions/download-artifact@v8
+        with:
+          name: WinAutomator-${{ needs.build.outputs.version }}-airgap-proof
+          path: dist
+
+      - name: Add proof hash to SHA256SUMS
+        shell: pwsh
+        run: |
+          $proof = 'dist\AIRGAP-VERIFICATION.json'
+          if (-not (Test-Path -LiteralPath $proof)) { throw 'AIRGAP-VERIFICATION.json is missing.' }
+          $hash = (Get-FileHash -LiteralPath $proof -Algorithm SHA256).Hash.ToLowerInvariant()
+          Add-Content -LiteralPath 'dist\SHA256SUMS.txt' -Value "$hash  AIRGAP-VERIFICATION.json" -Encoding ASCII
+
+      - name: Attest verified release assets
         uses: actions/attest@v4
         with:
           subject-path: |
             dist/WinAutomator-*-win-x64.zip
             dist/WinAutomator-*-Setup-win-x64.exe
             dist/WinAutomator-*-offline-dev.zip
+            dist/AIRGAP-VERIFICATION.json
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TAG: ${{ needs.build.outputs.tag }}
         shell: pwsh
         run: |
           $assets = @(
-            "dist\WinAutomator-$env:VERSION-win-x64.zip",
+            "dist\WinAutomator-$env:VERSION-FULL-OFFLINE-win-x64.zip",
             "dist\WinAutomator-$env:VERSION-Setup-win-x64.exe",
+            "dist\WinAutomator-$env:VERSION-win-x64.zip",
             "dist\WinAutomator-$env:VERSION-offline-dev.zip",
+            "dist\AIRGAP-VERIFICATION.json",
             "dist\SHA256SUMS.txt"
           )
           foreach ($asset in $assets) {
-            if (-not (Test-Path $asset)) { throw "Release asset missing: $asset" }
+            if (-not (Test-Path -LiteralPath $asset)) { throw "Release asset missing: $asset" }
           }
+
+          $notes = @(
+            '## Offline guarantee',
+            '',
+            "**Recommended download for a machine without Internet:** ``WinAutomator-$env:VERSION-FULL-OFFLINE-win-x64.zip``",
+            '',
+            'The exact published FULL-OFFLINE archive was verified on a fresh Windows runner before this release was created:',
+            '- outbound network blocked for installer and application processes by Windows Firewall;',
+            '- HTTP/HTTPS/ALL proxy forced to an unreachable local endpoint;',
+            '- system Python removed from PATH;',
+            '- embedded manifest and SHA-256 payload verified;',
+            '- portable smoke + GUI smoke + normal launch passed;',
+            '- silent installer, installed smoke + GUI smoke + normal launch and uninstall passed.',
+            '',
+            'See `AIRGAP-VERIFICATION.json` and `SHA256SUMS.txt` attached to this release.'
+          )
+          $notes -join "`r`n" | Set-Content -LiteralPath release-notes.md -Encoding UTF8
 
           $ghArgs = @(
             'release', 'create', $env:TAG,
             '--repo', $env:GITHUB_REPOSITORY,
             '--target', $env:GITHUB_SHA,
             '--title', "Win Automator $env:TAG",
-            '--generate-notes'
+            '--notes-file', 'release-notes.md'
           )
           if ($env:VERSION -match '-') { $ghArgs += '--prerelease' }
           $ghArgs += $assets
           & gh @ghArgs
           if ($LASTEXITCODE -ne 0) { throw "gh release create failed with code $LASTEXITCODE" }
 
-      - name: Upload build log artifacts
+      - name: Upload verified release archive
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: release-${{ steps.version.outputs.version }}-assets
+          name: release-${{ needs.build.outputs.version }}-verified-assets
           path: |
             dist/*.zip
             dist/*.exe
+            dist/*.json
             dist/SHA256SUMS.txt
           if-no-files-found: warn
           retention-days: 30
