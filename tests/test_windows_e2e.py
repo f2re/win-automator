@@ -124,11 +124,15 @@ def test_excel_to_multi_window_application_end_to_end(tmp_path):
             selector.name = ""
             selector.parent_name = ""
 
+        # The modal does not exist while the scenario is being assembled, so do
+        # not invent an AutomationId for it. In WinForms, Control.Name is not a
+        # guaranteed UIA AutomationId. The recorder-visible identity here is the
+        # dialog title + process + accessible name + control type; the same
+        # semantic fallback is what real recorded modal controls can use.
         dialog_confirm = Selector(
             backend="uia",
             window_title="WinAutomator Integration Dialog",
             process_name="powershell.exe",
-            automation_id="txtConfirm",
             control_type="Edit",
             name="Подтверждение",
         )
@@ -136,7 +140,6 @@ def test_excel_to_multi_window_application_end_to_end(tmp_path):
             backend="uia",
             window_title="WinAutomator Integration Dialog",
             process_name="powershell.exe",
-            automation_id="btnDone",
             control_type="Button",
             name="Готово",
         )
