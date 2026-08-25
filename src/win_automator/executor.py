@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
+from .debug_capture import DebugSink
 from .inspector import resolve
 from .models import Scenario, Step
 
@@ -38,8 +40,13 @@ class RunResult:
 
 
 class Executor:
-    def __init__(self, on_step: Optional[Callable[[int, Step], None]] = None) -> None:
+    def __init__(
+        self,
+        on_step: Optional[Callable[[int, Step], None]] = None,
+        debug_sink: Optional[DebugSink] = None,
+    ) -> None:
         self.on_step = on_step
+        self.debug = debug_sink if debug_sink is not None else DebugSink.from_environment("executor")
 
     @staticmethod
     def _mapped_value(scenario: Scenario, step: Step, row: Dict[str, Any]) -> Any:
@@ -51,28 +58,29 @@ class Executor:
             return mapping.get(str(value), value)
         return value
 
-    def _set_value(self, wrapper, value: Any) -> None:
+    def _set_value(self, wrapper, value: Any) -> str:
         text = "" if value is None else str(value)
         try:
             wrapper.set_edit_text(text)
-            return
+            return "set_edit_text"
         except Exception:
             pass
         try:
             wrapper.set_text(text)
-            return
+            return "set_text"
         except Exception:
             pass
         wrapper.click_input()
         from pywinauto.keyboard import send_keys
 
         send_keys("^a{BACKSPACE}" + _escape_send_keys(text), with_spaces=True, pause=0.01)
+        return "send_keys"
 
-    def _select(self, wrapper, value: Any) -> None:
+    def _select(self, wrapper, value: Any) -> str:
         text = "" if value is None else str(value)
         try:
             wrapper.select(text)
-            return
+            return "wrapper.select"
         except Exception:
             pass
         try:
@@ -80,53 +88,96 @@ class Executor:
             for item in wrapper.descendants(control_type="ListItem"):
                 if item.window_text().strip().casefold() == text.strip().casefold():
                     item.select()
-                    return
+                    return "expand+listitem.select"
         except Exception:
             pass
         raise RuntimeError("В списке не найдено значение '{}'".format(text))
 
-    def execute_step(self, scenario: Scenario, step: Step, row: Dict[str, Any]) -> None:
+    def execute_step(
+        self,
+        scenario: Scenario,
+        step: Step,
+        row: Dict[str, Any],
+        index: int = -1,
+    ) -> str:
         action = step.action.casefold()
         if action == "start_app":
             command = self._mapped_value(scenario, step, row)
             subprocess.Popen(str(command), shell=True)
-            return
+            return "subprocess.Popen"
         if action == "key":
             from pywinauto.keyboard import send_keys
 
             send_keys(step.key, pause=0.03)
-            return
+            return "send_keys"
         if step.target is None:
             raise ValueError("Для действия '{}' не задан элемент".format(step.action))
 
-        wrapper = resolve(step.target, timeout=step.timeout)
+        callback = None
+        if self.debug:
+            callback = lambda diagnostic: self.debug.record_resolver(index, diagnostic)
+        wrapper = resolve(step.target, timeout=step.timeout, diagnostic_callback=callback)
         try:
             wrapper.set_focus()
+            focus_method = "set_focus+"
         except Exception:
-            pass
+            focus_method = ""
 
         if action == "click":
             try:
                 wrapper.invoke()
+                return focus_method + "invoke"
             except Exception:
                 wrapper.click_input()
-        elif action == "double_click":
+                return focus_method + "click_input"
+        if action == "double_click":
             wrapper.double_click_input()
-        elif action == "set_value":
-            self._set_value(wrapper, self._mapped_value(scenario, step, row))
-        elif action == "select":
-            self._select(wrapper, self._mapped_value(scenario, step, row))
-        elif action == "close_window":
+            return focus_method + "double_click_input"
+        if action == "set_value":
+            return focus_method + self._set_value(wrapper, self._mapped_value(scenario, step, row))
+        if action == "select":
+            return focus_method + self._select(wrapper, self._mapped_value(scenario, step, row))
+        if action == "close_window":
             wrapper.top_level_parent().close()
-        else:
-            raise ValueError("Неизвестное действие '{}'".format(step.action))
+            return "top_level_parent.close"
+        raise ValueError("Неизвестное действие '{}'".format(step.action))
 
     def run(self, scenario: Scenario, row: Dict[str, Any]) -> RunResult:
+        if self.debug:
+            self.debug.log(
+                "executor_run_start",
+                scenario=self.debug.sanitize_scenario(scenario),
+                row_columns=list(row.keys()),
+                step_count=len(scenario.steps),
+            )
         for index, step in enumerate(scenario.steps):
+            started = time.monotonic()
             try:
                 if self.on_step:
                     self.on_step(index, step)
-                self.execute_step(scenario, step, row)
+                if self.debug:
+                    self.debug.record_executor_step("start", index, step)
+                method = self.execute_step(scenario, step, row, index=index)
+                if self.debug:
+                    self.debug.record_executor_step(
+                        "success",
+                        index,
+                        step,
+                        method=method,
+                        duration_ms=int((time.monotonic() - started) * 1000),
+                    )
             except Exception as exc:
-                return RunResult(False, index, StepExecutionError(index, step, exc))
+                error = StepExecutionError(index, step, exc)
+                if self.debug:
+                    self.debug.record_executor_step(
+                        "error",
+                        index,
+                        step,
+                        duration_ms=int((time.monotonic() - started) * 1000),
+                        error=str(error),
+                    )
+                    self.debug.log("executor_run_error", completed_steps=index, error=str(error))
+                return RunResult(False, index, error)
+        if self.debug:
+            self.debug.log("executor_run_success", completed_steps=len(scenario.steps))
         return RunResult(True, len(scenario.steps))
