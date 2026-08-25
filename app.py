@@ -29,6 +29,12 @@ def main():
         write_report(target, report)
         return 0 if report.get("ok") else 2
 
+    if "--debug-capture" in sys.argv:
+        from win_automator.debug_ui import run_debug_capture
+
+        run_debug_capture()
+        return 0
+
     from win_automator.ui import run
 
     run()
