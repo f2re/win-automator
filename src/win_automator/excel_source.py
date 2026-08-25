@@ -4,7 +4,7 @@ import datetime as dt
 import re
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from openpyxl import load_workbook
 
@@ -28,13 +28,11 @@ def normalize(value: Any) -> Tuple[str, Any]:
 
     text = re.sub(r"\s+", " ", str(value).strip())
     lowered = text.casefold()
-
-    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d.%m.%y"):
+    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d.%m.%y", "%d-%m-%Y"):
         try:
             return ("date", dt.datetime.strptime(text, fmt).date())
         except ValueError:
             continue
-
     numeric = text.replace(" ", "").replace(",", ".")
     if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", numeric):
         try:
@@ -49,6 +47,38 @@ def infer_columns(value: Any, row: Dict[str, Any]) -> List[str]:
     return [column for column, candidate in row.items() if normalize(candidate) == needle]
 
 
+def _tokens(value: object) -> List[str]:
+    return [token for token in re.findall(r"[0-9a-zа-яё]+", str(value or "").casefold()) if token]
+
+
+def infer_column(value: Any, row: Dict[str, Any], hints: Iterable[object] = ()) -> Optional[str]:
+    """Return one unambiguous Excel column, using control semantics only as a tie-breaker."""
+    matches = infer_columns(value, row)
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        return None
+
+    hint_texts = [str(h).strip().casefold() for h in hints if str(h or "").strip()]
+    hint_tokens = set(token for hint in hint_texts for token in _tokens(hint))
+    ranked: List[Tuple[int, str]] = []
+    for column in matches:
+        column_text = str(column).strip().casefold()
+        column_tokens = set(_tokens(column))
+        score = 0
+        for hint in hint_texts:
+            if column_text == hint:
+                score = max(score, 100)
+            elif column_text and hint and (column_text in hint or hint in column_text):
+                score = max(score, 60)
+        score += 10 * len(column_tokens & hint_tokens)
+        ranked.append((score, column))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    if ranked and ranked[0][0] > 0 and (len(ranked) == 1 or ranked[0][0] > ranked[1][0]):
+        return ranked[0][1]
+    return None
+
+
 def unique_headers(values: Sequence[Any]) -> List[str]:
     result: List[str] = []
     counts: Dict[str, int] = {}
@@ -57,6 +87,62 @@ def unique_headers(values: Sequence[Any]) -> List[str]:
         counts[base] = counts.get(base, 0) + 1
         result.append(base if counts[base] == 1 else "{} ({})".format(base, counts[base]))
     return result
+
+
+def _numeric_pattern(sample: str):
+    compact = sample.strip().replace(" ", "")
+    match = re.fullmatch(r"([+-]?)(\d+)(?:([,.])(\d+))?", compact)
+    if not match:
+        return None
+    sign, integer, separator, fraction = match.groups()
+    return sign, integer, separator or "", fraction or ""
+
+
+def format_like_sample(value: Any, sample: Any) -> str:
+    """Render typed Excel values in the operator-visible format learned during recording."""
+    if value is None:
+        return ""
+    sample_text = "" if sample is None else str(sample)
+    if isinstance(value, dt.datetime):
+        value = value.replace(microsecond=0)
+    if isinstance(value, (dt.date, dt.datetime)):
+        for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d.%m.%y", "%d-%m-%Y"):
+            try:
+                dt.datetime.strptime(sample_text.strip(), fmt)
+                return value.strftime(fmt)
+            except ValueError:
+                continue
+        if isinstance(value, dt.datetime) and ":" in sample_text:
+            return value.strftime("%d.%m.%Y %H:%M:%S")
+        return str(value)
+
+    pattern = _numeric_pattern(sample_text)
+    if pattern and isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
+        sign, integer_sample, separator, fraction_sample = pattern
+        try:
+            number = Decimal(str(value))
+            decimals = len(fraction_sample)
+            if decimals:
+                quantizer = Decimal(1).scaleb(-decimals)
+                rendered = format(number.quantize(quantizer), ".{}f".format(decimals))
+            else:
+                rendered = format(number.quantize(Decimal("1")), "f")
+            number_sign = ""
+            if rendered.startswith("-"):
+                number_sign = "-"
+                rendered = rendered[1:]
+            integer_part, _, fraction_part = rendered.partition(".")
+            if len(integer_sample) > 1 and integer_sample.startswith("0"):
+                integer_part = integer_part.zfill(len(integer_sample))
+            rendered = integer_part + (separator or ".") + fraction_part if decimals else integer_part
+            if number_sign:
+                rendered = "-" + rendered
+            elif sign == "+":
+                rendered = "+" + rendered
+            return rendered
+        except (InvalidOperation, ValueError):
+            pass
+    return str(value)
 
 
 class ExcelSource:
@@ -70,6 +156,28 @@ class ExcelSource:
     @property
     def sheets(self) -> List[str]:
         return list(self._book.sheetnames)
+
+    def detect_header_row(self, sheet: str, scan_rows: int = 20) -> int:
+        """Skip title/service rows and find the first practical tabular header."""
+        ws = self._book[sheet]
+        rows = list(ws.iter_rows(min_row=1, max_row=max(1, scan_rows + 1), values_only=True))
+        first_nonempty = 1
+        found_nonempty = False
+        for index, values in enumerate(rows[:scan_rows], start=1):
+            nonempty = [value for value in values if value not in (None, "")]
+            if nonempty and not found_nonempty:
+                first_nonempty = index
+                found_nonempty = True
+            if len(nonempty) < 2:
+                continue
+            textual = sum(1 for value in nonempty if isinstance(value, str) and value.strip())
+            if textual < max(2, int(len(nonempty) * 0.6)):
+                continue
+            next_values = rows[index] if index < len(rows) else ()
+            next_nonempty = sum(1 for value in next_values if value not in (None, ""))
+            if next_nonempty >= max(1, len(nonempty) // 2):
+                return index
+        return first_nonempty if found_nonempty else 1
 
     def read(self, sheet: str, header_row: int = 1) -> Tuple[List[str], List[Dict[str, Any]]]:
         ws = self._book[sheet]
