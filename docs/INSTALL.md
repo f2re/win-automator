@@ -14,7 +14,14 @@ WinAutomator-<version>-Setup-win-x64.exe
 %LOCALAPPDATA%\Programs\Win Automator
 ```
 
-Права администратора не требуются. После установки ярлык появляется в меню «Пуск»; ярлык на рабочем столе можно выбрать в мастере.
+Права администратора не требуются. После установки в меню «Пуск» появляются два ярлыка:
+
+```text
+Win Automator
+Win Automator — сбор отладки
+```
+
+Второй ярлык запускает диагностический контроллер для воспроизведения проблем и создания ZIP-пакета для разработчика. Подробно: [DEBUG.md](DEBUG.md).
 
 Python, pip и библиотеки на целевой машине не устанавливаются и не скачиваются: PyInstaller runtime уже входит в дистрибутив.
 
@@ -30,6 +37,12 @@ WinAutomator-<version>-win-x64.zip
 
 ```text
 WinAutomator\WinAutomator.exe
+```
+
+Режим сбора отладки в portable:
+
+```powershell
+.\WinAutomator\WinAutomator.exe --debug-capture
 ```
 
 Не переносите только один EXE: PyInstaller использует `onedir`, поэтому рядом находятся необходимые DLL, Tcl/Tk и Python-модули. Portable-вариант также не требует системного Python.
@@ -93,17 +106,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Offline
 
 Для создания installer должен быть установлен Inno Setup 6. Без него локальная сборка создаст portable ZIP. CI/release требует installer в основном release job и завершится ошибкой, если `ISCC.exe` недоступен.
 
-Перед формированием ZIP `build.ps1` запускает уже собранный `WinAutomator.exe` в smoke-режиме. Проверяются Tcl/Tk, `openpyxl`, `pywinauto`, `pywin32`, `comtypes`, `pynput`, SQLite, scenario JSON и запись пользовательских данных.
+Перед формированием ZIP `build.ps1` запускает уже собранный `WinAutomator.exe` в smoke-режиме. Проверяются Tcl/Tk, `openpyxl`, `pywinauto`, `pywin32`, `comtypes`, `pynput`, SQLite, scenario JSON, debug writer и запись пользовательских данных.
 
 ## 6. Что автоматически проверяет CI
 
 CI использует два независимых Windows runner:
 
-1. основной runner выполняет unit tests и реальный UI Automation E2E на WinForms, собирает portable + Inno Setup, устанавливает Setup в новый каталог, выполняет packaged smoke/GUI smoke и проверяет обычный запуск GUI;
-2. второй runner получает только подготовленный offline payload, после чего `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` направляются на несуществующий локальный proxy, а `PIP_NO_INDEX=1` запрещает индекс пакетов;
-3. на втором runner с нуля выполняется `bootstrap.ps1 -Offline`, self-test, unit tests и тот же UIA E2E;
-4. затем `build.ps1 -Offline` собирает portable без сети;
-5. ZIP распаковывается в новый целевой каталог, выполняются packaged smoke, GUI smoke и обычный запуск приложения.
+1. основной runner выполняет unit tests и реальный UI Automation E2E на WinForms; E2E дополнительно проверяет, что `Executor` пишет структурированный debug trace и при включённой маскировке не сохраняет значения полей;
+2. основной runner собирает portable + Inno Setup, устанавливает Setup в новый каталог, выполняет packaged smoke/GUI smoke и проверяет обычный запуск GUI;
+3. второй runner получает только подготовленный offline payload, после чего `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` направляются на несуществующий локальный proxy, а `PIP_NO_INDEX=1` запрещает индекс пакетов;
+4. на втором runner с нуля выполняется `bootstrap.ps1 -Offline`, self-test, unit tests и тот же UIA E2E;
+5. затем `build.ps1 -Offline` собирает portable без сети;
+6. ZIP распаковывается в новый целевой каталог, выполняются packaged smoke, GUI smoke и обычный запуск приложения.
 
 То есть CI проверяет цепочку не только до «файл собрался», а до фактического запуска поставленного приложения.
 
@@ -112,8 +126,8 @@ CI использует два независимых Windows runner:
 Скачайте `SHA256SUMS.txt` из того же release и сравните:
 
 ```powershell
-Get-FileHash .\WinAutomator-0.2.1-win-x64.zip -Algorithm SHA256
-Get-FileHash .\WinAutomator-0.2.1-Setup-win-x64.exe -Algorithm SHA256
+Get-FileHash .\WinAutomator-0.3.0-win-x64.zip -Algorithm SHA256
+Get-FileHash .\WinAutomator-0.3.0-Setup-win-x64.exe -Algorithm SHA256
 Get-Content .\SHA256SUMS.txt
 ```
 

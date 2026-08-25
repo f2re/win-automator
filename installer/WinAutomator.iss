@@ -42,6 +42,7 @@ Name: "desktopicon"; Description: "Создать ярлык на рабочем
 
 [Icons]
 Name: "{autoprograms}\Win Automator"; Filename: "{app}\WinAutomator.exe"; WorkingDir: "{app}"
+Name: "{autoprograms}\Win Automator — сбор отладки"; Filename: "{app}\WinAutomator.exe"; Parameters: "--debug-capture"; WorkingDir: "{app}"; Comment: "Записать диагностический пакет для разработчика"
 Name: "{autodesktop}\Win Automator"; Filename: "{app}\WinAutomator.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from typing import Callable, Dict, List, Optional
 
+from .debug_capture import DebugSink
 from .excel_source import infer_columns
 from .inspector import inspect_point
 from .models import Scenario, Step, ValueSpec
@@ -19,10 +20,12 @@ class SemanticRecorder:
         row: Dict[str, object],
         on_step: Optional[Callable[[Step], None]] = None,
         on_stop: Optional[Callable[[], None]] = None,
+        debug_sink: Optional[DebugSink] = None,
     ) -> None:
         self.row = row
         self.on_step = on_step
         self.on_stop = on_stop
+        self.debug = debug_sink if debug_sink is not None else DebugSink.from_environment("recorder")
         self.steps: List[Step] = []
         self.paused = False
         self.running = False
@@ -35,11 +38,20 @@ class SemanticRecorder:
 
     def _append(self, step: Step) -> None:
         self.steps.append(step)
+        if self.debug:
+            self.debug.record_semantic_step(step, origin="recorder")
         if self.on_step:
             self.on_step(step)
 
     def _value_spec(self, value: object) -> ValueSpec:
         matches = infer_columns(value, self.row)
+        if self.debug:
+            self.debug.log(
+                "recorder_value_mapping",
+                matching_columns=matches,
+                matched=len(matches) == 1,
+                value_length=len(str(value or "")),
+            )
         if len(matches) == 1:
             return ValueSpec(source="excel", column=matches[0], literal=value)
         return ValueSpec(source="literal", literal=value)
@@ -72,7 +84,16 @@ class SemanticRecorder:
             pass
         try:
             target = inspect_point(int(x), int(y))
-        except Exception:
+            if self.debug:
+                self.debug.log(
+                    "recorder_inspect",
+                    x=int(x),
+                    y=int(y),
+                    target=self.debug._redact_selector(target),
+                )
+        except Exception as exc:
+            if self.debug:
+                self.debug.log("recorder_inspect_error", x=int(x), y=int(y), error=str(exc))
             return
 
         self._flush_text()
@@ -115,8 +136,12 @@ class SemanticRecorder:
 
         if key == Key.f8:
             self.paused = not self.paused
+            if self.debug:
+                self.debug.log("recorder_pause", paused=self.paused)
             return
         if key == Key.f9:
+            if self.debug:
+                self.debug.log("recorder_finish_hotkey")
             self.stop()
             return False
         if self.paused:
@@ -146,6 +171,8 @@ class SemanticRecorder:
         from pynput import keyboard, mouse
 
         self.running = True
+        if self.debug:
+            self.debug.log("recorder_start", row_columns=list(self.row.keys()))
         self._mouse_listener = mouse.Listener(on_click=self._on_click)
         self._keyboard_listener = keyboard.Listener(on_press=self._on_press)
         self._mouse_listener.start()
@@ -162,6 +189,8 @@ class SemanticRecorder:
             if self._keyboard_listener:
                 self._keyboard_listener.stop()
         finally:
+            if self.debug:
+                self.debug.log("recorder_stop", step_count=len(self.steps))
             if self.on_stop:
                 self.on_stop()
         return Scenario(steps=list(self.steps))

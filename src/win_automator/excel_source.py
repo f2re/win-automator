@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 from openpyxl import load_workbook
 
+from .debug_capture import DebugSink
+
 
 def normalize(value: Any) -> Tuple[str, Any]:
     if value is None:
@@ -60,7 +62,10 @@ def unique_headers(values: Sequence[Any]) -> List[str]:
 class ExcelSource:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
+        self.debug = DebugSink.from_environment("excel")
         self._book = load_workbook(str(self.path), data_only=True, read_only=True)
+        if self.debug:
+            self.debug.log("excel_open", file_name=self.path.name, sheets=list(self._book.sheetnames))
 
     @property
     def sheets(self) -> List[str]:
@@ -73,6 +78,8 @@ class ExcelSource:
             next(iterator, None)
         header_values = next(iterator, None)
         if header_values is None:
+            if self.debug:
+                self.debug.record_excel_schema(self.path, sheet, [], 0)
             return [], []
         headers = unique_headers(header_values)
         rows: List[Dict[str, Any]] = []
@@ -81,7 +88,11 @@ class ExcelSource:
             row = {headers[i]: padded[i] for i in range(len(headers))}
             if any(value not in (None, "") for value in row.values()):
                 rows.append(row)
+        if self.debug:
+            self.debug.record_excel_schema(self.path, sheet, headers, len(rows))
         return headers, rows
 
     def close(self) -> None:
         self._book.close()
+        if self.debug:
+            self.debug.log("excel_close", file_name=self.path.name)

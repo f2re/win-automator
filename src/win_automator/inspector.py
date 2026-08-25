@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Dict, Optional
 
 from .models import Selector
 
@@ -132,16 +132,49 @@ def score_wrapper(wrapper, selector: Selector) -> int:
     return score
 
 
-def resolve(selector: Selector, timeout: float = 10.0, minimum_score: int = 30):
+def _candidate_payload(wrapper, score: int) -> Dict[str, object]:
+    info = wrapper.element_info
+    top = wrapper.top_level_parent()
+    return {
+        "score": int(score),
+        "name": str(_safe(wrapper.window_text, "") or getattr(info, "name", "") or ""),
+        "control_type": str(getattr(info, "control_type", "") or ""),
+        "automation_id": str(getattr(info, "automation_id", "") or ""),
+        "class_name": str(getattr(info, "class_name", "") or ""),
+        "control_id": getattr(info, "control_id", None),
+        "window_title": str(_safe(top.window_text, "") or ""),
+    }
+
+
+def _emit(callback, payload: Dict[str, object]) -> None:
+    if not callback:
+        return
+    try:
+        callback(payload)
+    except Exception:
+        pass
+
+
+def resolve(
+    selector: Selector,
+    timeout: float = 10.0,
+    minimum_score: int = 30,
+    diagnostic_callback: Optional[Callable[[Dict[str, object]], None]] = None,
+):
     from pywinauto import Desktop
 
     deadline = time.time() + max(0.2, timeout)
     last_error = None
+    last_best_payload: Optional[Dict[str, object]] = None
+    last_signature = None
+    attempt = 0
     while time.time() < deadline:
+        attempt += 1
         try:
             desktop = Desktop(backend=selector.backend or "uia")
             windows = desktop.windows()
             best: Optional[Candidate] = None
+            candidate_count = 0
             for window in windows:
                 try:
                     title = str(_safe(window.window_text, "") or "")
@@ -159,17 +192,57 @@ def resolve(selector: Selector, timeout: float = 10.0, minimum_score: int = 30):
                     except Exception:
                         pass
                     for wrapper in candidates:
+                        candidate_count += 1
                         current = score_wrapper(wrapper, selector)
                         if best is None or current > best.score:
                             best = Candidate(wrapper, current)
                 except Exception:
                     continue
-            if best and best.score >= minimum_score:
-                return best.wrapper
+            if best:
+                last_best_payload = _candidate_payload(best.wrapper, best.score)
+                signature = (
+                    last_best_payload.get("score"),
+                    last_best_payload.get("automation_id"),
+                    last_best_payload.get("control_id"),
+                    last_best_payload.get("name"),
+                )
+                if signature != last_signature:
+                    _emit(
+                        diagnostic_callback,
+                        {
+                            "stage": "candidate",
+                            "attempt": attempt,
+                            "candidate_count": candidate_count,
+                            "candidate": last_best_payload,
+                        },
+                    )
+                    last_signature = signature
+                if best.score >= minimum_score:
+                    _emit(
+                        diagnostic_callback,
+                        {
+                            "stage": "resolved",
+                            "attempt": attempt,
+                            "candidate_count": candidate_count,
+                            "minimum_score": minimum_score,
+                            "candidate": last_best_payload,
+                        },
+                    )
+                    return best.wrapper
             last_error = RuntimeError("лучший score={}".format(best.score if best else 0))
         except Exception as exc:
             last_error = exc
         time.sleep(0.2)
+    _emit(
+        diagnostic_callback,
+        {
+            "stage": "timeout",
+            "attempt": attempt,
+            "minimum_score": minimum_score,
+            "candidate": last_best_payload,
+            "error": str(last_error or "нет кандидатов"),
+        },
+    )
     raise TimeoutError(
         "Элемент не найден за {:.1f} с: {} ({})".format(
             timeout,

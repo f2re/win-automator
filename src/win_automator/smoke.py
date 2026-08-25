@@ -27,6 +27,8 @@ def run_smoke_test(gui: bool = False) -> dict:
         import pywinauto  # noqa: F401
         import tkinter  # noqa: F401
         import win32api  # noqa: F401
+        from .debug_capture import DebugSession, DebugSink  # noqa: F401
+        from .debug_ui import DebugCaptureApp  # noqa: F401
 
     _check("runtime-imports", import_runtime, results)
 
@@ -95,6 +97,18 @@ def run_smoke_test(gui: bool = False) -> dict:
                 db.conn.close()
 
         _check("checkpoint", checkpoint_test, results)
+
+        def debug_sink_test() -> None:
+            from .debug_capture import ACTIVE_MARKER, DebugSink
+            debug_root = root / "debug-smoke"
+            debug_root.mkdir()
+            (debug_root / ACTIVE_MARKER).write_text("smoke", encoding="utf-8")
+            sink = DebugSink(debug_root, source="smoke")
+            sink.log("smoke_event", ok=True)
+            if not sink.events_path.exists() or "smoke_event" not in sink.events_path.read_text(encoding="utf-8"):
+                raise RuntimeError("Debug JSONL writer failed")
+
+        _check("debug-capture", debug_sink_test, results)
 
         def localappdata_test() -> None:
             from .storage import data_dir
