@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
+from win_automator.debug_capture import ACTIVE_MARKER, ENV_DEBUG_DIR, ENV_DEBUG_VALUES
 from win_automator.executor import Executor
 from win_automator.inspector import selector_from_wrapper
 from win_automator.models import Scenario, Step, ValueSpec
@@ -33,7 +34,16 @@ def main() -> int:
     from pywinauto import Desktop
 
     with tempfile.TemporaryDirectory(prefix="win-automator-e2e-") as tmp:
-        result_path = Path(tmp) / "result.json"
+        tmp_root = Path(tmp)
+        result_path = tmp_root / "result.json"
+        debug_root = tmp_root / "debug"
+        debug_root.mkdir()
+        (debug_root / ACTIVE_MARKER).write_text("e2e", encoding="utf-8")
+        old_debug_dir = os.environ.get(ENV_DEBUG_DIR)
+        old_debug_values = os.environ.get(ENV_DEBUG_VALUES)
+        os.environ[ENV_DEBUG_DIR] = str(debug_root)
+        os.environ[ENV_DEBUG_VALUES] = "0"
+
         env = os.environ.copy()
         env["WIN_AUTOMATOR_E2E_RESULT"] = str(result_path)
         target = ROOT / "scripts" / "E2ETargetForm.ps1"
@@ -112,12 +122,30 @@ def main() -> int:
             if data != expected:
                 raise AssertionError("UIA roundtrip mismatch: {!r} != {!r}".format(data, expected))
 
+            event_files = list(debug_root.glob("events-executor-*.jsonl"))
+            if len(event_files) != 1:
+                raise AssertionError("Expected one executor debug event file, got {}".format(event_files))
+            debug_text = event_files[0].read_text(encoding="utf-8")
+            for required in ("executor_run_start", "resolver", "executor_step", "executor_run_success"):
+                if '"type":"{}"'.format(required) not in debug_text:
+                    raise AssertionError("Debug trace missing event type: {}".format(required))
+            if row["ФИО"] in debug_text or row["Должность"] in debug_text:
+                raise AssertionError("Debug trace leaked field values while redaction was enabled")
+
             proc.wait(timeout=10)
             if proc.returncode != 0:
                 raise RuntimeError("E2ETargetForm exited with code {}".format(proc.returncode))
-            print("UIA E2E OK: Unicode text filled, ComboBox selected and Save invoked")
+            print("UIA E2E OK: actions executed and structured debug trace captured")
             return 0
         finally:
+            if old_debug_dir is None:
+                os.environ.pop(ENV_DEBUG_DIR, None)
+            else:
+                os.environ[ENV_DEBUG_DIR] = old_debug_dir
+            if old_debug_values is None:
+                os.environ.pop(ENV_DEBUG_VALUES, None)
+            else:
+                os.environ[ENV_DEBUG_VALUES] = old_debug_values
             if proc.poll() is None:
                 proc.terminate()
                 try:
