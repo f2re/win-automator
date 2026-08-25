@@ -15,9 +15,9 @@ concurrency:
 
 jobs:
   release-package:
-    name: Windows x64 release and installer
+    name: Windows x64 release candidate
     runs-on: windows-2022
-    timeout-minutes: 35
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -46,7 +46,7 @@ jobs:
         shell: pwsh
         run: python .\scripts\e2e_ui_test.py
 
-      - name: Build complete offline dependency bundle
+      - name: Build complete offline developer dependencies
         shell: pwsh
         run: |
           .\download-offline-deps.ps1 -Python (Get-Command python).Source -SkipBootstrap
@@ -56,7 +56,7 @@ jobs:
           if (@($manifest.files).Count -lt 5) { throw 'Offline manifest has too few payload files.' }
           if ((Get-ChildItem 'offline\wheels' -File).Count -lt 5) { throw 'Offline wheel set is unexpectedly small.' }
 
-      - name: Upload offline bundle for clean runner
+      - name: Upload offline developer dependencies for clean runner
         uses: actions/upload-artifact@v7
         with:
           name: WinAutomator-offline-dependencies
@@ -78,11 +78,15 @@ jobs:
           $version = (Get-Content -Raw VERSION).Trim()
           $manifest = Get-Content -Raw dist\WinAutomator\version.json | ConvertFrom-Json
           if ($manifest.version -ne $version) { throw "Version mismatch: $($manifest.version) != $version" }
+          if ($manifest.network_required -ne $false) { throw 'Packaged app does not declare network_required=false.' }
+          if ($manifest.standalone -ne $true) { throw 'Packaged app does not declare standalone=true.' }
 
           $portable = "dist\WinAutomator-$version-win-x64.zip"
           $setup = "dist\WinAutomator-$version-Setup-win-x64.exe"
+          $fullOffline = "dist\WinAutomator-$version-FULL-OFFLINE-win-x64.zip"
           if (-not (Test-Path $portable)) { throw "Portable archive missing: $portable" }
           if (-not (Test-Path $setup)) { throw "Installer missing: $setup" }
+          if (-not (Test-Path $fullOffline)) { throw "FULL-OFFLINE archive missing: $fullOffline" }
           if (-not (Test-Path 'dist\SHA256SUMS.txt')) { throw 'SHA256SUMS.txt missing.' }
 
           $installDir = Join-Path $env:RUNNER_TEMP "WinAutomator-$version-installed"
@@ -119,7 +123,7 @@ jobs:
 
           Get-Content dist\SHA256SUMS.txt
 
-      - name: Upload CI packages
+      - name: Upload exact end-user candidate for clean runner
         uses: actions/upload-artifact@v7
         with:
           name: WinAutomator-${{ github.sha }}-win-x64
@@ -131,29 +135,45 @@ jobs:
           retention-days: 14
 
   offline-deployment:
-    name: Air-gapped bootstrap, build and launch
+    name: Strict air-gapped target and developer deployment
     needs: release-package
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout on fresh runner
         uses: actions/checkout@v7
 
-      - name: Download offline dependency bundle
+      - name: Download exact end-user release candidate
+        uses: actions/download-artifact@v8
+        with:
+          name: WinAutomator-${{ github.sha }}-win-x64
+          path: release-dist
+
+      - name: Strictly prove FULL-OFFLINE target package
+        shell: pwsh
+        run: |
+          $version = (Get-Content -Raw VERSION).Trim()
+          $package = "release-dist\WinAutomator-$version-FULL-OFFLINE-win-x64.zip"
+          if (-not (Test-Path -LiteralPath $package)) { throw "FULL-OFFLINE candidate missing: $package" }
+          .\scripts\verify-airgap-release.ps1 `
+            -PackagePath $package `
+            -ReportPath "release-dist\AIRGAP-VERIFICATION.json"
+
+      - name: Download offline developer dependencies
         uses: actions/download-artifact@v8
         with:
           name: WinAutomator-offline-dependencies
           path: offline
 
-      - name: Verify artifact layout
+      - name: Verify developer artifact layout
         shell: pwsh
         run: |
           if (-not (Test-Path 'offline\python-3.8.10-amd64.exe')) { throw 'Python installer missing after artifact download.' }
           if (-not (Test-Path 'offline\manifest.json')) { throw 'Offline manifest missing after artifact download.' }
           if ((Get-ChildItem 'offline\wheels' -File).Count -lt 5) { throw 'Offline wheels missing after artifact download.' }
 
-      - name: Fresh bootstrap with network deliberately unavailable
+      - name: Fresh developer bootstrap with network deliberately unavailable
         shell: pwsh
         env:
           HTTP_PROXY: http://127.0.0.1:9
@@ -167,7 +187,7 @@ jobs:
           .\.venv\Scripts\python.exe .\scripts\self_test.py
           .\.venv\Scripts\python.exe -m pytest -q
 
-      - name: Real UIA E2E from offline environment
+      - name: Real UIA E2E from offline developer environment
         shell: pwsh
         env:
           HTTP_PROXY: http://127.0.0.1:9
@@ -176,7 +196,7 @@ jobs:
           PIP_NO_INDEX: '1'
         run: .\.venv\Scripts\python.exe .\scripts\e2e_ui_test.py
 
-      - name: Build portable package using offline dependencies only
+      - name: Rebuild portable package using offline dependencies only
         shell: pwsh
         env:
           HTTP_PROXY: http://127.0.0.1:9
@@ -185,7 +205,7 @@ jobs:
           PIP_NO_INDEX: '1'
         run: .\build.ps1 -Offline
 
-      - name: Extract and launch portable package on clean target path
+      - name: Extract and launch offline-rebuilt portable package
         shell: pwsh
         run: |
           $version = (Get-Content -Raw VERSION).Trim()
@@ -213,11 +233,14 @@ jobs:
           if ($live.HasExited) { throw "Portable normal GUI launch failed with exit code $($live.ExitCode)." }
           Stop-Process -Id $live.Id -Force
 
-      - name: Upload offline-verified portable package
+      - name: Upload offline proof and rebuilt portable package
         uses: actions/upload-artifact@v7
         with:
           name: WinAutomator-${{ github.sha }}-offline-verified
           path: |
+            release-dist/WinAutomator-*-FULL-OFFLINE-win-x64.zip
+            release-dist/AIRGAP-VERIFICATION.json
+            release-dist/SHA256SUMS.txt
             dist/WinAutomator-*-win-x64.zip
             dist/SHA256SUMS.txt
           if-no-files-found: error
